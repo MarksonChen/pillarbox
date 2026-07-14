@@ -1,0 +1,218 @@
+:root {
+  color-scheme: light;
+  --bg: #f3f5f8;
+  --card: #ffffff;
+  --fg: #171a1f;
+  --muted: #69707c;
+  --border: #e3e7ee;
+  --accent: #2f6bff;
+  --accent-soft: rgba(47, 107, 255, 0.12);
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 24px -12px rgba(16, 24, 40, 0.12);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #101318;
+  --card: #191d24;
+  --fg: #e7eaee;
+  --muted: #9aa3b0;
+  --border: #2a303a;
+  --accent: #6f9bff;
+  --accent-soft: rgba(111, 155, 255, 0.16);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main { max-width: 600px; margin: 0 auto; padding: 40px 20px 56px; }
+
+/* ---- header ---- */
+.hero { display: flex; align-items: center; gap: 13px; margin-bottom: 18px; }
+h1 {
+  margin: 0;
+  font-family: "Avenir Next", Futura, "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  background: linear-gradient(120deg, #58c6ff, #3b6cff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---- live preview (nested in the Appearance card) ---- */
+.preview {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg);
+  margin: 8px 0 10px;
+}
+.pv-chrome {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border);
+}
+.pv-chrome i { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
+.pv-chrome span {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pv-page { display: flex; height: 108px; background: var(--pv-page-bg, #fff); transition: background 0.2s; }
+.pv-panel { width: 14%; flex: none; transition: width 0.15s ease, background 0.15s ease; }
+.pv-content { flex: 1; display: flex; flex-direction: column; gap: 8px; justify-content: center; padding: 0 8%; }
+.pv-content i { height: 7px; border-radius: 4px; background: var(--pv-line, #e6e9ef); transition: background 0.2s; }
+
+/* ---- cards & rows ---- */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 6px 18px 12px;
+  margin-top: 16px;
+  box-shadow: var(--shadow);
+}
+h2 {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 14px 0 4px;
+}
+.field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+.field + .field { border-top: 1px solid var(--border); }
+.field.trailing { justify-content: flex-end; padding-top: 4px; border-top: 0; }
+.label { font-weight: 500; }
+
+/* ---- segmented theme control ---- */
+.segmented {
+  display: flex;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 3px;
+}
+.segmented label { position: relative; }
+.segmented input { position: absolute; opacity: 0; inset: 0; pointer-events: none; }
+.segmented span {
+  display: block;
+  padding: 4px 14px;
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.segmented input:checked + span {
+  background: var(--card);
+  color: var(--fg);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+.segmented input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---- colors ---- */
+.colorwrap { display: flex; align-items: center; gap: 10px; }
+.colorwrap code { color: var(--muted); font: 12px ui-monospace, Menlo, monospace; }
+input[type="color"] {
+  width: 44px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  cursor: pointer;
+}
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+input[type="color"]::-webkit-color-swatch { border: none; border-radius: 5px; }
+
+/* ---- numbers ---- */
+.numwrap { display: flex; align-items: center; gap: 8px; }
+input[type="number"] {
+  width: 84px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.unit { color: var(--muted); }
+
+/* ---- switches ---- */
+.switch {
+  appearance: none;
+  width: 40px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--border);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s;
+  flex: none;
+  margin: 0;
+}
+.switch::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: left 0.15s;
+}
+.switch:checked { background: var(--accent); }
+.switch:checked::before { left: 19px; }
+
+/* ---- buttons, keycaps ---- */
+button.ghost {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+button.ghost:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+.shortcutwrap { display: flex; align-items: center; gap: 10px; }
+.keys { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+kbd {
+  min-width: 26px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  text-align: center;
+  /* System font, not monospace: SF/Segoe render ⌘ ⌥ ⇧ properly. */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+input[type="number"]:focus-visible,
+input[type="color"]:focus-visible,
+.switch:focus-visible,
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

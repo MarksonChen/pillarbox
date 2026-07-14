@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pillarbox — Options</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+<main>
+  <header class="hero">
+    <img src="../icons/icon128.png" alt="" width="44" height="44">
+    <h1>Pillarbox</h1>
+  </header>
+
+  <form id="settingsForm">
+    <section class="card">
+      <h2>Appearance</h2>
+      <div class="preview" aria-hidden="true">
+        <div class="pv-chrome"><i></i><i></i><i></i><span>Preview</span></div>
+        <div class="pv-page">
+          <div class="pv-panel" id="pvLeft"></div>
+          <div class="pv-content">
+            <i style="width:60%"></i><i style="width:92%"></i><i style="width:85%"></i>
+            <i style="width:90%"></i><i style="width:64%"></i>
+          </div>
+          <div class="pv-panel" id="pvRight"></div>
+        </div>
+      </div>
+      <div class="field">
+        <span class="label">Theme</span>
+        <div class="segmented" role="radiogroup" aria-label="Sidebar theme">
+          <label><input type="radio" name="theme" value="auto"><span>Auto</span></label>
+          <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+          <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+        </div>
+      </div>
+      <div class="field">
+        <label class="label" for="colorLight">Sidebar color — light</label>
+        <div class="colorwrap">
+          <code id="colorLightHex"></code>
+          <input type="color" id="colorLight">
+        </div>
+      </div>
+      <div class="field">
+        <label class="label" for="colorDark">Sidebar color — dark</label>
+        <div class="colorwrap">
+          <code id="colorDarkHex"></code>
+          <input type="color" id="colorDark">
+        </div>
+      </div>
+      <div class="field trailing">
+        <button id="resetColors" type="button" class="ghost">Reset colors</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Sidebars</h2>
+      <div class="field">
+        <label class="label" for="defaultLeft">Default left width</label>
+        <div class="numwrap"><input type="number" id="defaultLeft" min="0" max="800" step="10"><span class="unit">px</span></div>
+      </div>
+      <div class="field">
+        <label class="label" for="defaultRight">Default right width</label>
+        <div class="numwrap"><input type="number" id="defaultRight" min="0" max="800" step="10"><span class="unit">px</span></div>
+      </div>
+      <div class="field">
+        <label class="label" for="showReadout">Pixel readout while resizing</label>
+        <input type="checkbox" id="showReadout" class="switch">
+      </div>
+    </section>
+  </form>
+
+  <section class="card">
+    <h2>Keyboard shortcut</h2>
+    <div class="field">
+      <span class="label">Toggle sidebars</span>
+      <div class="shortcutwrap">
+        <span id="shortcutValue" class="keys">…</span>
+        <button id="openShortcuts" type="button" class="ghost">Change…</button>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="../shared/defaults.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

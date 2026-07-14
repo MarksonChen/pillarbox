@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pillarbox — test page</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { font: 15px/1.6 system-ui, sans-serif; color: #1f2328; background: #fff; }
+
+  /* Full-width fixed navbar with markers at both extremes. Should be inset
+     by the extension when "squeeze fixed bars" is on. */
+  #navbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    background: #0f172a;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    box-sizing: border-box;
+    z-index: 100;
+  }
+
+  /* Sticky subheader: normal flow, must reflow with NO help from the
+     fixed-bar manager. */
+  #sticky {
+    position: sticky;
+    top: 56px;
+    background: #fbbf24;
+    padding: 8px 12px;
+    z-index: 50;
+  }
+
+  /* 100vw full-bleed hero: pokes under the opaque panels by design. */
+  #hero {
+    width: 100vw;
+    margin-left: calc(50% - 50vw);
+    background: linear-gradient(90deg, #60a5fa, #a78bfa);
+    color: #fff;
+    padding: 40px 16px;
+    box-sizing: border-box;
+  }
+
+  /* Partial-width fixed widget: negative control, must NOT be inset. */
+  #fab {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #e11d48;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+
+  /* Appears later via button/timer: exercises the childList observer path. */
+  .latebar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    background: #16a34a;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    box-sizing: border-box;
+    z-index: 90;
+  }
+
+  /* Becomes fixed when it gains .fixedNow: exercises the attribute path
+     (sticky-on-scroll style headers). */
+  #morphBar { background: #7c3aed; color: #fff; padding: 8px 12px; }
+  #morphBar.fixedNow {
+    position: fixed;
+    top: 56px;
+    left: 0;
+    right: 0;
+    z-index: 95;
+  }
+
+  main { padding-top: 56px; }
+  /* Deliberately left-hugging, full-width text: the layout this extension
+     exists to fix. */
+  p { margin: 12px 0; width: 100%; }
+  .controls { margin: 16px 0; display: flex; gap: 8px; }
+</style>
+</head>
+<body>
+  <nav id="navbar"><span>L-EDGE</span><span>fixed navbar</span><span>R-EDGE</span></nav>
+  <main>
+    <div id="sticky">sticky subheader (reflows on its own)</div>
+    <div id="hero">100vw full-bleed hero (pokes under the panels — covered)</div>
+    <div id="morphBar">morphing bar — becomes <code>position:fixed</code> via class change</div>
+    <div class="controls">
+      <button id="addBar">Add late fixed bar</button>
+      <button id="morphNow">Morph bar to fixed now</button>
+    </div>
+    <div id="content"></div>
+  </main>
+  <div id="fab">💬</div>
+  <script>
+    const content = document.getElementById('content');
+    for (let i = 1; i <= 40; i++) {
+      const p = document.createElement('p');
+      p.textContent = `Paragraph ${i}. This text is intentionally full-width and `
+        + 'hugs the left edge so wide screens make it uncomfortable to read. '
+        + 'The extension should squeeze it into the inner region between the '
+        + 'two sidebars, reflowing the lines rather than covering them. '
+        + 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do '
+        + 'eiusmod tempor incididunt ut labore et dolore magna aliqua.';
+      content.append(p);
+    }
+
+    function addLateBar() {
+      if (document.getElementById('lateBar')) return;
+      const bar = document.createElement('div');
+      bar.id = 'lateBar';
+      bar.className = 'latebar';
+      bar.innerHTML = '<span>L-EDGE</span><span>late fixed bar</span><span>R-EDGE</span>';
+      document.body.append(bar);
+    }
+    document.getElementById('addBar').addEventListener('click', addLateBar);
+    document.getElementById('morphNow').addEventListener('click', () => {
+      document.getElementById('morphBar').classList.add('fixedNow');
+    });
+    // Auto-fire once, for manual testing convenience.
+    setTimeout(addLateBar, 2000);
+  </script>
+</body>
+</html>

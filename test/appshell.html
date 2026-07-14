@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pillarbox — app-shell test</title>
+<style>
+  /* SPA app-shell pattern (claude.ai-style artifact viewer): the page never
+     scrolls; a viewport-anchored shell manages its own layout. An absolute
+     inset-0 box with no positioned ancestor is anchored to the *initial
+     containing block*, so <html> margins alone cannot move it.
+
+     The shell nests MORE full-viewport absolute layers (React apps stack
+     these). Only the outermost, viewport-anchored one may be inset by the
+     extension — the inner ones follow it, and insetting them too would
+     shrink the content once per level (regression: cascade over-squeeze). */
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  #shell {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+  }
+  #bar {
+    height: 48px;
+    flex: none;
+    background: #0f172a;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+  }
+  #frameWrap {
+    flex: 1;
+    position: relative; /* positioned ancestor for #inner */
+  }
+  #inner {
+    position: absolute; /* anchored to #frameWrap, NOT the viewport */
+    inset: 0;
+  }
+  #frame {
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+</style>
+</head>
+<body>
+  <div id="shell">
+    <div id="bar"><span>L-EDGE</span><span>viewer header</span><span>R-EDGE</span></div>
+    <div id="frameWrap">
+      <div id="inner">
+        <iframe id="frame" srcdoc="
+          <body style='margin:0;font:15px/1.6 system-ui'>
+            <p>Artifact content inside a sandboxed-style iframe. When the shell
+            is inset, this iframe's own viewport narrows and the text reflows
+            exactly like a window resize. Lorem ipsum dolor sit amet,
+            consectetur adipiscing elit, sed do eiusmod tempor incididunt ut
+            labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+            nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo
+            consequat.</p>
+          </body>"></iframe>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

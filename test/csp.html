@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="style-src 'none'; script-src 'none'">
+<title>Pillarbox — hostile CSP test</title>
+</head>
+<body>
+  <h1>Hostile-CSP page</h1>
+  <p>
+    This page ships <code>style-src 'none'; script-src 'none'</code>, so it is
+    deliberately unstyled. The extension's sidebars must still appear fully
+    styled (opaque, themed) and the text below must still reflow inward,
+    because the extension styles everything through the CSSOM and a shadow
+    root, which page CSP cannot block.
+  </p>
+  <p>
+    Filler text to make the reflow visible. Lorem ipsum dolor sit amet,
+    consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore
+    et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud
+    exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+    Duis aute irure dolor in reprehenderit in voluptate velit esse cillum
+    dolore eu fugiat nulla pariatur.
+  </p>
+</body>
+</html>
