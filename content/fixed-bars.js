@@ -1,19 +1,29 @@
 // Best-effort "squeeze" for full-width elements the <html> margins can't
-// reach: position:fixed boxes (navbars, cookie banners) are laid out against
-// the viewport, and position:absolute boxes with no positioned ancestor
-// (SPA app shells like claude.ai's `absolute inset-0` root) are anchored to
-// the initial containing block — both ignore the margin squeeze. Qualifying
-// elements get inline left/right insets matching the sidebars instead.
-// Sticky elements are normal flow and are never touched.
+// reach. Three kinds of box escape the margin squeeze:
+//   - position:fixed boxes (navbars, cookie banners) are laid out against
+//     the viewport -> inset with left/right matching the sidebars.
+//   - position:absolute boxes with no positioned ancestor (SPA app shells
+//     like claude.ai's `absolute inset-0` root) are anchored to the initial
+//     containing block -> same insets.
+//   - normal-flow boxes sized with viewport units (`width:100vw` app shells:
+//     chatgpt.com, notion.so) or pulled out by the full-bleed idiom
+//     `margin-inline: calc(0px - (50vw - 50%))` (reddit's header). Viewport
+//     units ignore every ancestor width -> override with width:auto (and
+//     zero the negative margins) so the box tracks its squeezed parent.
+// Sticky elements are normal flow and reflow on their own; they are only
+// touched if they escape like any other flow box.
 var SQZ = globalThis.SQZ ??= {};
 
 // ??= so re-injection can't replace a live instance (see squeeze.js).
 SQZ.fixedBars ??= (() => {
-  const PROPS = ['left', 'right', 'width'];
   const FULL_WIDTH_RATIO = 0.9; // rect must span >= 90% of the viewport
   const INLINE_SCAN_MAX = 200;  // bigger added subtrees go to the idle queue
+  // Inline marker on every adopted element so a later life of this content
+  // script (extension reload) can find and strip stale overrides exactly.
+  const MARKER = '--pillarbox';
 
-  const managed = new Map();    // Element -> saved inline {value, priority} per prop
+  const managed = new Map();    // Element -> {mode, want, priors}
+  let rejected = new WeakSet(); // flow candidates our overrides couldn't fix
   let widths = null;            // {left, right} while running, else null
   let excluded = () => false;   // predicate; the panels host must never be adopted
   let observer = null;
@@ -21,6 +31,10 @@ SQZ.fixedBars ??= (() => {
   let queue = [];
   let queueIndex = 0;
   let rescanTimer = 0;
+
+  function escapes(rect, vw) {
+    return rect.left < widths.left - 1 || rect.right > vw - widths.right + 1;
+  }
 
   // Absolute boxes must be anchored to the initial containing block to be
   // adoptable. Anything below a positioned/transformed ancestor moves with
@@ -40,86 +54,125 @@ SQZ.fixedBars ??= (() => {
     return true;
   }
 
-  function qualifies(el) {
+  // Decide how to adopt an element; null leaves it alone. Candidates must
+  // span >= 90% of the viewport AND visibly escape the squeeze (margins are
+  // applied before any scan runs, so properly reflowed content — and
+  // anything below an already-adopted ancestor, thanks to the document-order
+  // scan — never trips the escape test). Narrower fixed widgets (chat
+  // buttons, side drawers) are left alone and sit under the opaque panels.
+  function classify(el) {
     if (el.nodeType !== Node.ELEMENT_NODE
         || el === document.documentElement
-        || excluded(el)) return false;
+        || excluded(el)) return null;
+    const vw = SQZ.viewportWidth();
+    const rect = el.getBoundingClientRect();
+    if (rect.width < vw * FULL_WIDTH_RATIO || !escapes(rect, vw)) return null;
     let cs;
-    try { cs = getComputedStyle(el); } catch { return false; }
-    const pos = cs.position;
-    if (pos !== 'fixed' && pos !== 'absolute') return false;
-    // Only full-width boxes. Narrower fixed widgets (chat buttons, side
-    // drawers) are left alone and simply sit under the opaque panels.
+    try { cs = getComputedStyle(el); } catch { return null; }
     // <body> itself can qualify: modal scroll-locks often fix it, and since
     // fixed boxes ignore the html margins, insetting it is the correct
     // single squeeze, not a double one.
-    const rect = el.getBoundingClientRect();
-    const vw = SQZ.viewportWidth();
-    if (rect.width < vw * FULL_WIDTH_RATIO) return false;
-    // Adopt only boxes that visibly ESCAPE the squeeze (margins are applied
-    // before any scan runs). Properly reflowed content — and anything that
-    // follows an already-inset ancestor — starts at the margin and never
-    // trips this.
-    if (!(rect.left < widths.left - 1 || rect.right > vw - widths.right + 1)) return false;
-    if (pos === 'fixed') return true; // viewport-anchored by definition
-    return anchoredToViewport(el);
+    if (cs.position === 'fixed') return { mode: 'inset' };
+    if (cs.position === 'absolute') {
+      return anchoredToViewport(el) ? { mode: 'inset' } : null;
+    }
+    // Normal flow. Width overrides only make sense on HTML block-level boxes.
+    if (!(el instanceof HTMLElement) || cs.display === 'inline') return null;
+    const want = { width: 'auto' };
+    if (parseFloat(cs.minWidth) >= vw * FULL_WIDTH_RATIO) want['min-width'] = '0px';
+    for (const side of ['left', 'right']) {
+      const margin = parseFloat(side === 'left' ? cs.marginLeft : cs.marginRight);
+      if (margin < -0.5) {
+        want['margin-' + side] = '0px';
+        // The full-bleed idiom pairs the negative margin with an equal
+        // padding; zeroing both restores the intended content position.
+        const pad = parseFloat(side === 'left' ? cs.paddingLeft : cs.paddingRight);
+        if (Math.abs(pad + margin) < 1) want['padding-' + side] = '0px';
+      }
+    }
+    return { mode: 'flow', want };
   }
 
-  function assertOne(el) {
-    const want = { left: widths.left + 'px', right: widths.right + 'px', width: 'auto' };
-    for (const prop of PROPS) {
+  function desired(entry) {
+    const base = entry.mode === 'inset'
+      ? { left: widths.left + 'px', right: widths.right + 'px', width: 'auto' }
+      : entry.want;
+    return { ...base, [MARKER]: '1' };
+  }
+
+  function assertOne(el, entry) {
+    for (const [prop, value] of Object.entries(desired(entry))) {
       // Write only if different so our own attribute mutations can't loop.
-      if (el.style.getPropertyValue(prop) !== want[prop]
+      if (el.style.getPropertyValue(prop) !== value
           || el.style.getPropertyPriority(prop) !== 'important') {
-        el.style.setProperty(prop, want[prop], 'important');
+        el.style.setProperty(prop, value, 'important');
       }
     }
   }
 
-  function adopt(el) {
-    const priors = {};
-    for (const prop of PROPS) {
-      priors[prop] = {
+  function adopt(el, spec) {
+    const entry = { mode: spec.mode, want: spec.want, priors: {} };
+    for (const prop of Object.keys(desired(entry))) {
+      entry.priors[prop] = {
         value: el.style.getPropertyValue(prop),
         priority: el.style.getPropertyPriority(prop),
       };
     }
-    managed.set(el, priors);
-    assertOne(el);
+    managed.set(el, entry);
+    assertOne(el, entry);
+    // Flow overrides are a guess: the box may be wide for reasons width
+    // can't fix (a table sized by unbreakable content, say). Verify, and
+    // back out of adoptions that changed nothing.
+    if (entry.mode === 'flow'
+        && escapes(el.getBoundingClientRect(), SQZ.viewportWidth())) {
+      release(el);
+      rejected.add(el);
+    }
   }
 
   function release(el) {
-    const priors = managed.get(el);
-    if (!priors) return;
+    const entry = managed.get(el);
+    if (!entry) return;
     managed.delete(el);
-    for (const prop of PROPS) {
+    for (const [prop, prior] of Object.entries(entry.priors)) {
       el.style.removeProperty(prop);
-      if (priors[prop].value) el.style.setProperty(prop, priors[prop].value, priors[prop].priority);
+      if (prior.value) el.style.setProperty(prop, prior.value, prior.priority);
     }
   }
 
   function consider(el) {
-    if (!managed.has(el) && qualifies(el)) adopt(el);
+    if (managed.has(el) || rejected.has(el)) return;
+    const spec = classify(el);
+    if (spec) adopt(el, spec);
   }
 
   function reconsider(el) {
-    if (!managed.has(el)) {
+    const entry = managed.get(el);
+    if (!entry) {
+      // NB: rejected elements stay rejected (until the next start()). The
+      // adopt -> verify -> release round-trip mutates the style attribute,
+      // so clearing the flag here would re-adopt in the observer callback
+      // and loop forever.
       consider(el);
       return;
     }
-    // Managed elements never re-run the width/escape tests: once inset,
-    // their rect is (viewport - left - right) wide, which fails those checks
-    // by construction and would flap adopt/release forever. They are
-    // released only when they leave the DOM or stop being fixed/absolute.
-    let keep = false;
-    if (el.isConnected) {
-      try {
-        const pos = getComputedStyle(el).position;
-        keep = pos === 'fixed' || pos === 'absolute';
-      } catch {}
+    // Managed elements never re-run the width/escape tests: once adopted,
+    // their rect no longer escapes by construction, which would flap
+    // adopt/release forever. They are released only when they leave the DOM
+    // or change positioning category (inset <-> flow).
+    if (!el.isConnected) {
+      release(el);
+      return;
     }
-    if (keep) assertOne(el); // page rewrote its inline style: re-assert
-    else release(el);
+    let pos = null;
+    try { pos = getComputedStyle(el).position; } catch {}
+    const mode = pos === 'fixed' || pos === 'absolute' ? 'inset' : pos ? 'flow' : null;
+    if (mode === entry.mode) {
+      assertOne(el, entry); // page rewrote its inline style: re-assert
+    } else {
+      release(el);
+      if (mode) consider(el); // e.g. a bar just turned fixed: adopt fresh
+    }
   }
 
   function pump() {
@@ -128,8 +181,8 @@ SQZ.fixedBars ??= (() => {
       idleHandle = 0;
       let budget = 300; // minimum progress even when the page never idles
       // Strict document order (parents before children): a parent adopted
-      // first is already inset when its descendants are measured, so they
-      // no longer escape the squeeze and can't be adopted on top of it.
+      // first is already squeezed when its descendants are measured, so they
+      // no longer escape and can't be adopted on top of it.
       while (queueIndex < queue.length && (budget-- > 0 || deadline.timeRemaining() > 5)) {
         consider(queue[queueIndex++]);
       }
@@ -183,6 +236,7 @@ SQZ.fixedBars ??= (() => {
     stop();
     widths = { left, right };
     excluded = isExcluded ?? (() => false);
+    rejected = new WeakSet();
     scanAll();
     observer = new MutationObserver(onMutations);
     observer.observe(document.documentElement, {
@@ -197,7 +251,7 @@ SQZ.fixedBars ??= (() => {
     if (!widths) return;
     widths = { left, right };
     for (const el of [...managed.keys()]) {
-      if (el.isConnected) assertOne(el);
+      if (el.isConnected) assertOne(el, managed.get(el));
       else release(el);
     }
     // Viewport resizes move the 90% threshold; rescan once things settle.

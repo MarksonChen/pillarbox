@@ -282,6 +282,10 @@ SQZ.panels ??= (() => {
     hs.setProperty('display', 'block', 'important');
     hs.setProperty('pointer-events', 'none', 'important');
     hs.setProperty('z-index', '2147483647', 'important');
+    // The host is an undefined custom element; some sites hide all of those
+    // as an anti-flicker guard (reddit: `:not(:defined){visibility:hidden}`).
+    // Inline !important is the one thing a page stylesheet can't beat.
+    hs.setProperty('visibility', 'visible', 'important');
 
     const root = host.attachShadow({ mode: 'open' });
     try {

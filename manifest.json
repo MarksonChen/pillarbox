@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Pillarbox",
-  "version": "0.2.0",
-  "description": "Squeeze page content inward between two resizable, empty sidebars. Remembers widths per page.",
+  "name": "Pillarbox: Push Page Left/Right/Inward",
+  "version": "0.3.0",
+  "description": "Push page content leftward / rightward / inward with adjustable sidebars",
   "permissions": ["storage", "scripting"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },

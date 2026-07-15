@@ -180,7 +180,7 @@ async function main() {
         const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
         try {
           const name = await evalIn(sessionId, 'chrome.runtime.getManifest().name');
-          if (name === 'Pillarbox') {
+          if (name.startsWith('Pillarbox')) {
             console.log(`extension loaded: ${new URL(t.url).host}`);
             return { sw: sessionId, extId: new URL(t.url).host };
           }
@@ -569,6 +569,61 @@ async function main() {
       return v.ml === '0px' && v.left === 0 && near(v.frameW, shellBase.frameW) ? v : null;
     }, 4000, 'app shell restored');
     check('app shell fully restored on toggle off', true);
+
+    // ---------- viewport-unit shells (chatgpt/notion/reddit patterns) ----------
+    const VW_SNAP = `(() => {
+      const cw = document.documentElement.clientWidth;
+      const r = (id) => {
+        const b = document.getElementById(id).getBoundingClientRect();
+        return { left: Math.round(b.left), right: Math.round(b.right) };
+      };
+      const brk = getComputedStyle(document.getElementById('breakout'));
+      const host = document.querySelector('pillarbox-host');
+      const table = document.getElementById('wideTable');
+      return {
+        cw,
+        ml: getComputedStyle(document.documentElement).marginLeft,
+        shell: r('vwshell'), inner: r('inner100vw'),
+        breakout: r('breakout'), table: r('wideTable'),
+        brkMargin: brk.marginLeft, brkPad: brk.paddingLeft,
+        hostVis: host ? getComputedStyle(host).visibility : null,
+        tableMarked: table.style.getPropertyValue('--pillarbox'),
+        tableInlineW: table.style.width,
+      };
+    })()`;
+    const vwPage = await openPage(`${BASE}/vwshell.html`);
+    await sleep(300);
+    const vwOn = await toggleViaWorker(`${BASE}/vwshell.html`);
+    check('vw-shell page toggles on', vwOn && vwOn.on === true, JSON.stringify(vwOn));
+    const vs = await until(async () => {
+      const v = await evalIn(vwPage, VW_SNAP);
+      return v.ml === '200px' && v.shell.left === 200
+        && v.shell.right === v.cw - 200 && v.breakout.left === 200 ? v : null;
+    }, 5000, 'vw shells squeezed');
+    check('width:100vw shells adopted (stylesheet + nested inline)',
+      vs.inner.left === 200 && vs.inner.right === vs.cw - 200,
+      JSON.stringify({ shell: vs.shell, inner: vs.inner }));
+    check('negative-margin breakout neutralized (reddit header pattern)',
+      vs.breakout.right === vs.cw - 200 && vs.brkMargin === '0px' && vs.brkPad === '0px',
+      JSON.stringify({ rect: vs.breakout, margin: vs.brkMargin, pad: vs.brkPad }));
+    check('panels visible despite :not(:defined) anti-FOUC rule',
+      vs.hostVis === 'visible', `visibility=${vs.hostVis}`);
+    check('content-sized table adoption backed out (verify-and-undo)',
+      vs.tableMarked === '' && vs.tableInlineW === '' && vs.table.right > vs.cw - 200,
+      JSON.stringify({ marked: vs.tableMarked, inlineW: vs.tableInlineW, rect: vs.table }));
+
+    // Toggle off restores everything, including the inline 100vw prior.
+    await toggleViaWorker(`${BASE}/vwshell.html`);
+    await until(async () => (await evalIn(vwPage, VW_SNAP)).ml === '0px', 4000, 'vw shells restored');
+    const vwRestored = await evalIn(vwPage, `({
+      shellW: document.getElementById('vwshell').style.width,
+      innerW: document.getElementById('inner100vw').style.width,
+      brkStyle: document.getElementById('breakout').getAttribute('style') ?? '',
+    })`);
+    check('flow adoptions fully restored (inline width:100vw prior kept)',
+      vwRestored.shellW === '' && vwRestored.innerW === '100vw'
+        && !vwRestored.brkStyle.includes('margin'),
+      JSON.stringify(vwRestored));
   } finally {
     cleanup();
   }

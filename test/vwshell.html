@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Viewport-unit shells — Pillarbox test page</title>
+<style>
+  /* reddit-style anti-FOUC guard: hides every undefined custom element —
+     including the extension's panel host unless it defends itself. */
+  :not(:defined) { visibility: hidden; }
+  body { margin: 0; font: 16px/1.5 sans-serif; }
+  p { padding: 0 12px; }
+  /* chatgpt.com pattern: the whole app shell pinned to the viewport width
+     by a stylesheet rule (Tailwind's w-screen). */
+  #vwshell { width: 100vw; background: #e8eefc; }
+  /* reddit header pattern: full-bleed breakout via paired viewport-relative
+     padding and negative margin — recomputes against any container width. */
+  #breakout {
+    padding-inline: calc(50vw - 50%);
+    margin-inline: calc(0px - (50vw - 50%));
+    background: #e6f7e9;
+  }
+  #wideTable td { font: 16px/1 monospace; background: #fff3e0; }
+</style>
+</head>
+<body>
+<div id="vwshell">
+  <h1 style="margin: 0; padding: 12px">width:100vw shell (stylesheet)</h1>
+  <!-- notion.so pattern: inline viewport width -->
+  <div id="inner100vw" style="width: 100vw; background: #fdecec">
+    nested inline width:100vw
+  </div>
+</div>
+<div id="breakout">full-bleed breakout bar</div>
+<p>Negative control below: the table is wide because of unbreakable content;
+width overrides change nothing and the manager must back out of adopting it.</p>
+<table id="wideTable"><tr>
+<td>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</td>
+</tr></table>
+<p>Everything above must sit between the sidebars while squeezed; the table
+may overflow (horizontal scrollbar) because its width is content-determined.</p>
+</body>
+</html>

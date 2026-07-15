@@ -25,7 +25,9 @@ put their content hard-left, hard-right, or across the full window width.
   pages (older records are silently pruned).
 - Full-width `position:fixed` bars (navbars, cookie banners, fixed app
   shells) are **also squeezed**, best-effort and always on; sticky elements
-  reflow on their own.
+  reflow on their own. So are app shells pinned to the viewport with
+  `width:100vw` (chatgpt.com, notion.so) and full-bleed bars that break out
+  with viewport-relative negative margins (reddit's header).
 - **Options page**: live preview, theme (Auto/Light/Dark), sidebar colors
   for the light and dark themes, default widths, the pixel readout while
   resizing (off by default), a gesture reference, and the current keyboard
@@ -58,13 +60,26 @@ put their content hard-left, hard-right, or across the full window width.
   change; everything is restored exactly on toggle-off. Squeezing the shell
   also narrows any iframe inside it, so framed content (e.g. artifact
   viewers) reflows like a window resize.
+- **Viewport-unit shells**: normal-flow boxes can escape too, by being
+  sized with viewport units (`width:100vw` app shells — chatgpt.com,
+  notion.so) or pulled out by the full-bleed idiom
+  `margin-inline: calc(0px - (50vw - 50%))` (reddit's header). Escaping
+  flow boxes get `width:auto` (and their negative margins zeroed) so they
+  track their squeezed parent again. Each adoption is verified and undone
+  if it changed nothing (a table sized by unbreakable content can't be
+  fixed by width overrides). The panel host also pins
+  `visibility:visible !important` inline, because some sites hide all
+  undefined custom elements as an anti-flicker guard (reddit's
+  `:not(:defined){visibility:hidden}`).
 
 ## Known limitations (by design)
 
 - Media queries don't re-evaluate — the site keeps its desktop layout, just
   narrower (that's the point). Pages with a hard `min-width` show a
   horizontal scrollbar because the content area is genuinely narrower.
-- `100vw` full-bleed sections still extend under the (opaque) panels.
+- `100vw` sections narrower than 90% of the viewport, and boxes that are
+  wide because of unbreakable content (code blocks, tables), still extend
+  under the (opaque) panels.
 - Fixed elements narrower than 90% of the viewport (chat buttons, side
   drawers) are not moved and may sit partly under a panel.
 - Fixed bars centered with `left:50% + translateX(-50%)` can end up shifted.
@@ -87,7 +102,7 @@ manifest.json          extension wiring
 background.js          service worker: icon click -> toggle message (+ inject fallback)
 shared/defaults.js     constants shared by all contexts
 content/squeeze.js     html-margin reflow + style watcher
-content/fixed-bars.js  full-width fixed-element manager
+content/fixed-bars.js  escaping-element manager (fixed bars, vw-unit shells)
 content/panels.js      shadow-DOM panels + drag handles
 content/index.js       per-page state machine, storage, lifecycle
 options/               options page

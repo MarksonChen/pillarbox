@@ -35,7 +35,8 @@
     z-index: 50;
   }
 
-  /* 100vw full-bleed hero: pokes under the opaque panels by design. */
+  /* 100vw full-bleed hero: spans >= 90% of the viewport and escapes the
+     squeeze, so the flow-shell adoption narrows it to the page width. */
   #hero {
     width: 100vw;
     margin-left: calc(50% - 50vw);
@@ -100,7 +101,7 @@
   <nav id="navbar"><span>L-EDGE</span><span>fixed navbar</span><span>R-EDGE</span></nav>
   <main>
     <div id="sticky">sticky subheader (reflows on its own)</div>
-    <div id="hero">100vw full-bleed hero (pokes under the panels — covered)</div>
+    <div id="hero">100vw full-bleed hero (adopted: squeezed to the page width)</div>
     <div id="morphBar">morphing bar — becomes <code>position:fixed</code> via class change</div>
     <div class="controls">
       <button id="addBar">Add late fixed bar</button>

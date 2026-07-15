@@ -69,13 +69,20 @@ if (!SQZ.booted) {
         'user-select', '-webkit-user-select']) {
         if (style.getPropertyPriority(prop) === 'important') style.removeProperty(prop);
       }
-      // The previous life's fixed-bar insets also survive on page elements.
-      // They carry our exact fingerprint (left + right + width:auto, all
-      // !important), and a fresh manager could never re-adopt them: an
-      // already-inset box no longer escapes the squeeze.
+      // The previous life's fixed-bar overrides also survive on page
+      // elements, and a fresh manager could never re-adopt them: an already
+      // squeezed box no longer escapes. Adopted elements carry an inline
+      // --pillarbox marker; strip everything the manager could have written.
+      // (Lives before the marker existed left the inset fingerprint
+      // left + right + width:auto, all !important.)
       for (const el of document.getElementsByTagName('*')) {
         const s = el.style;
-        if (s.getPropertyValue('width') === 'auto'
+        if (s.getPropertyValue('--pillarbox')) {
+          for (const prop of ['--pillarbox', 'left', 'right', 'width', 'min-width',
+            'margin-left', 'margin-right', 'padding-left', 'padding-right']) {
+            s.removeProperty(prop);
+          }
+        } else if (s.getPropertyValue('width') === 'auto'
             && s.getPropertyPriority('width') === 'important'
             && s.getPropertyPriority('left') === 'important'
             && s.getPropertyPriority('right') === 'important') {
