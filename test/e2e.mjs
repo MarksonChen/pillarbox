@@ -514,6 +514,27 @@ async function main() {
     writeFileSync(shotPath3, Buffer.from(shot3.data, 'base64'));
     console.log('screenshot: ' + shotPath3);
 
+    // Echo regression: a save that changes nothing fires NO onChanged event,
+    // so matching own writes by count leaks and swallows the next remote
+    // change. Make an identical save, then a remote change — the form must
+    // still re-render.
+    await evalIn(opts, `(() => {
+      const el = document.getElementById('defaultLeft');
+      el.value = el.value; // unchanged -> identical settings object
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`);
+    await sleep(400);
+    await settingsSet({ theme: 'dark', defaultLeft: 333, defaultRight: 200 });
+    await until(async () => (await evalIn(opts,
+      `document.getElementById('defaultLeft').value`)) === '333',
+      3000, 'options re-render after an identical save');
+    check('options: identical save does not swallow the next remote change', true);
+    await settingsSet({ theme: 'dark', defaultLeft: 200, defaultRight: 200 });
+    await until(async () => (await evalIn(opts,
+      `document.getElementById('defaultLeft').value`)) === '200',
+      3000, 'default widths restored for later sections');
+
     // Silent LRU: only the SQZ.MAX_PAGES most recently used page records
     // are kept; the oldest are pruned by the service worker.
     await evalIn(sw, `(async () => {
@@ -565,6 +586,27 @@ async function main() {
     check('nested absolute layer squeezed exactly once (no cascade)',
       near(shellSq.innerLeft, 200) && near(shellSq.frameW, shellBase.frameW - 400, 8),
       `innerLeft=${shellSq.innerLeft} frameW before=${shellBase.frameW} after=${shellSq.frameW}`);
+
+    // Anchor-loss regression: a transform on <body> makes it the containing
+    // block for the absolute shell, which then follows the squeezed body on
+    // its own — keeping our inline insets would squeeze it twice. The
+    // manager must release the shell (inline left gone, marker gone) while
+    // the shell still lands at x=200 via the body.
+    await evalIn(shellPage, `document.body.style.transform = 'translateZ(0)'; true`);
+    const shellFreed = await until(async () => {
+      const v = await evalIn(shellPage, `(() => {
+        const el = document.getElementById('shell');
+        return {
+          inlineLeft: el.style.left,
+          marker: el.style.getPropertyValue('--pillarbox'),
+          left: el.getBoundingClientRect().left,
+        };
+      })()`);
+      return v.inlineLeft === '' && v.marker === '' && near(v.left, 200) ? v : null;
+    }, 4000, 'anchor-lost shell released (still single-squeezed via body)');
+    check('absolute shell released when an ancestor becomes its containing block',
+      true, JSON.stringify(shellFreed));
+
     await toggleViaWorker(`${BASE}/appshell.html`);
     await until(async () => {
       const v = await evalIn(shellPage, SHELL_SNAP);

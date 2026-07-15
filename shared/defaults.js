@@ -70,6 +70,19 @@ SQZ.clampDrag = (px, otherSide) => {
   return Math.max(0, Math.min(Math.round(Number(px)) || 0, cap));
 };
 
+// Mirrored drag: the far side keeps a fixed offset from the dragged (near)
+// side, so both move by the same amount and backtracking retraces the same
+// widths. The pair is clamped jointly: both sides stop together at the
+// MIN_GAP limit, and neither goes below 0.
+SQZ.mirrorPair = (px, offset) => {
+  const budget = Math.max(0, SQZ.viewportWidth() - SQZ.MIN_GAP);
+  let near = Math.max(0, Math.min(Math.round(px) || 0, budget));
+  const over = near + Math.max(0, near + offset) - budget;
+  if (over > 0) near = Math.max(0, near - Math.ceil(over / 2));
+  const far = Math.min(Math.max(0, near + offset), budget - near);
+  return { near, far };
+};
+
 // Clamp a stored pair for the current viewport (loads, resizes, cross-tab
 // sync). If both sides together crowd out the minimum gap — e.g. the window
 // shrank since the widths were saved — scale them down proportionally.

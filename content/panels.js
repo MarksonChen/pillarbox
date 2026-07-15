@@ -155,19 +155,6 @@ SQZ.panels ??= (() => {
     host?.style.setProperty('display', visible ? 'block' : 'none', 'important');
   }
 
-  // Mirrored drag: while a modifier key is held, the far panel keeps a fixed
-  // offset from the dragged (near) one, so both move by the same amount and
-  // backtracking retraces the same widths. The pair is clamped jointly: both
-  // sides stop together at the MIN_GAP limit, and neither goes below 0.
-  function mirrorPair(px, offset) {
-    const budget = Math.max(0, SQZ.viewportWidth() - SQZ.MIN_GAP);
-    let near = Math.max(0, Math.min(Math.round(px) || 0, budget));
-    const over = near + Math.max(0, near + offset) - budget;
-    if (over > 0) near = Math.max(0, near - Math.ceil(over / 2));
-    const far = Math.min(Math.max(0, near + offset), budget - near);
-    return { near, far };
-  }
-
   function wireDrag(side, handle, readout) {
     const other = side === 'left' ? 'right' : 'left';
     let pointerId = null;
@@ -211,7 +198,7 @@ SQZ.panels ??= (() => {
         }
       }
       if (mirroring) {
-        const pair = mirrorPair(pointerPx, mirrorOffset);
+        const pair = SQZ.mirrorPair(pointerPx, mirrorOffset);
         widths[side] = pair.near;
         widths[other] = pair.far;
       } else {
@@ -259,17 +246,17 @@ SQZ.panels ??= (() => {
   }
 
   function mount(opts) {
-    if (host) { // defensive: already mounted, just sync
-      setWidths(opts.left, opts.right);
-      setAppearance(opts.appearance);
-      return;
-    }
     callbacks = {
       onDragStart: opts.onDragStart,
       onDrag: opts.onDrag,
       onDragEnd: opts.onDragEnd,
       onReset: opts.onReset,
     };
+    if (host) { // defensive: already mounted, just sync
+      setWidths(opts.left, opts.right);
+      setAppearance(opts.appearance);
+      return;
+    }
     widths = { left: opts.left, right: opts.right };
     for (const side of ['left', 'right']) {
       if (widths[side] > 0) lastNonZero[side] = widths[side];

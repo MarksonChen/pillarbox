@@ -66,7 +66,11 @@ async function loadSettings() {
   updatePreview();
 }
 
-let selfWrites = 0; // our own saves must not re-render (stomps in-progress edits)
+// Our own saves must not re-render the form (that would stomp an edit in
+// progress). Matched by content, not by count: a save that changes nothing
+// fires NO onChanged event at all, so a pending-write counter would leak
+// and swallow the next genuine remote change. Same idiom as content/index.js.
+const echoes = new Set(); // JSON stamps of our own writes
 
 async function saveSettings() {
   const settings = formState();
@@ -74,12 +78,14 @@ async function saveSettings() {
   $('#defaultRight').value = settings.defaultRight;
   applyPageTheme(settings.theme);
   updatePreview();
-  selfWrites++;
+  const stamp = JSON.stringify(settings);
+  echoes.add(stamp);
+  if (echoes.size > 16) echoes.delete(echoes.values().next().value);
   try {
     await chrome.storage.sync.set({ [SQZ.SETTINGS_KEY]: settings });
   } catch {
     // Write throttled/failed — resync the form to what storage really holds.
-    selfWrites--;
+    echoes.delete(stamp);
     loadSettings();
   }
 }
@@ -142,10 +148,8 @@ function renderModKeys() {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync' || !(SQZ.SETTINGS_KEY in changes)) return;
-  if (selfWrites > 0) {
-    selfWrites--; // our own save; the form is already current
-    return;
-  }
+  const stamp = JSON.stringify(changes[SQZ.SETTINGS_KEY].newValue);
+  if (echoes.delete(stamp)) return; // our own save; the form is already current
   loadSettings();
 });
 

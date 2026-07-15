@@ -22,21 +22,28 @@ if (!SQZ.booted) {
 
     // Listeners are registered synchronously so a toolbar click arriving
     // while storage is still loading finds a receiver (the message handler
-    // awaits `ready` before acting).
+    // awaits `ready` before acting). The chrome.* listeners die with the
+    // extension context on their own; the DOM listeners live in one table,
+    // each wrapped with the orphan check, so registration and the orphan
+    // teardown can't drift apart.
     chrome.runtime.onMessage.addListener(onMessage);
     chrome.storage.onChanged.addListener(onStorageChanged);
-    addEventListener('pageshow', onPageShow);
-    addEventListener('beforeprint', onBeforePrint);
-    addEventListener('afterprint', onAfterPrint);
-    addEventListener('resize', onResize);
     // Memory is per URL, so same-document (SPA) navigations must switch to
     // the new URL's record. The navigation API sees pushState/replaceState;
     // popstate/hashchange are belt-and-braces for back/forward.
-    if (globalThis.navigation?.addEventListener) {
-      navigation.addEventListener('navigatesuccess', onUrlChanged);
-    }
-    addEventListener('popstate', onUrlChanged);
-    addEventListener('hashchange', onUrlChanged);
+    const onNav = guarded(onUrlChanged);
+    const domListeners = [
+      [globalThis, 'pageshow', guarded(onPageShow)],
+      [globalThis, 'beforeprint', guarded(onBeforePrint)],
+      [globalThis, 'afterprint', guarded(onAfterPrint)],
+      [globalThis, 'resize', guarded(onResize)],
+      [globalThis, 'popstate', onNav],
+      [globalThis, 'hashchange', onNav],
+      ...(globalThis.navigation?.addEventListener
+        ? [[navigation, 'navigatesuccess', onNav]]
+        : []),
+    ];
+    for (const [target, type, fn] of domListeners) target.addEventListener(type, fn);
 
     // The observers in squeeze.js / fixed-bars.js probe this before
     // re-asserting styles. Without it, an orphaned script's watcher and a
@@ -168,23 +175,23 @@ if (!SQZ.booted) {
       return !chrome.runtime?.id;
     }
 
-    // Detected lazily — on the first SPA navigation, resize, storage call or
-    // style re-assertion that would have failed — the orphan restores the
-    // page and detaches completely. The next toolbar click injects a fresh
-    // script that takes over from storage.
+    // Wraps a DOM event handler with the orphan check: once the extension
+    // context is gone, any wake-up tears the script down instead of running.
+    function guarded(fn) {
+      return (...args) => (orphaned() ? teardown() : fn(...args));
+    }
+
+    // Detected lazily — on the first DOM event, storage call or style
+    // re-assertion that would have failed — the orphan restores the page and
+    // detaches completely. The next toolbar click injects a fresh script
+    // that takes over from storage.
     function teardown() {
       if (torndown) return;
       torndown = true;
       SQZ.orphanGuard = () => true;
-      removeEventListener('pageshow', onPageShow);
-      removeEventListener('beforeprint', onBeforePrint);
-      removeEventListener('afterprint', onAfterPrint);
-      removeEventListener('resize', onResize);
-      if (globalThis.navigation?.removeEventListener) {
-        navigation.removeEventListener('navigatesuccess', onUrlChanged);
+      for (const [target, type, fn] of domListeners) {
+        target.removeEventListener(type, fn);
       }
-      removeEventListener('popstate', onUrlChanged);
-      removeEventListener('hashchange', onUrlChanged);
       if (phase === 'active') disable();
       else phase = 'dormant';
     }
@@ -242,7 +249,14 @@ if (!SQZ.booted) {
     }
 
     function onStorageChanged(changes, area) {
-      if (phase === 'loading') return; // init()'s read already reflects this
+      if (torndown) return;
+      if (phase === 'loading') {
+        // init()'s read may or may not already include this write (it could
+        // have landed after the read resolved). Re-run once boot settles —
+        // applying it is idempotent if the read did see it.
+        ready.then(() => onStorageChanged(changes, area));
+        return;
+      }
       if (area === 'local' && KEY in changes) {
         const next = changes[KEY].newValue ?? null;
         if (next && echoes.delete(JSON.stringify(next))) return; // our own write
@@ -301,7 +315,6 @@ if (!SQZ.booted) {
       if (resizeRaf) return;
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = 0;
-        if (orphaned()) return teardown();
         if (phase !== 'active' || suspended || dragging) return;
         // Re-clamp for the new viewport; rec itself stays unclamped so a
         // temporarily small window doesn't permanently shrink saved widths.
@@ -309,50 +322,50 @@ if (!SQZ.booted) {
       });
     }
 
-    async function onUrlChanged() {
-      if (orphaned()) return teardown();
-      await ready;
-      const key = SQZ.pageKey(location.href);
-      if (key === KEY) return;
-      KEY = key;
-      const epoch = recEpoch;
-      let raw;
-      try {
-        raw = await chrome.storage.local.get(key);
-      } catch (e) {
-        if (orphaned()) return teardown(); // reload raced the check above
-        throw e;
-      }
-      // Bail if a newer navigation OR a local write (a toggle landing while
-      // this read was in flight) has already superseded this snapshot.
-      if (KEY !== key || recEpoch !== epoch) return;
-      rec = raw[key] ?? null;
-      applyRecord();
-    }
-
-    async function onPageShow(e) {
-      if (!e.persisted) return;
-      if (orphaned()) return teardown();
-      await ready;
-      // Back from the bfcache; storage may have moved on while frozen.
-      KEY = SQZ.pageKey(location.href);
+    // Re-read the current KEY's record (and, for bfcache returns, the
+    // settings too) and apply it. Bails if a newer navigation OR a local
+    // write (a toggle landing while the read was in flight) has already
+    // superseded this snapshot.
+    async function refreshRecord(withSettings) {
       const key = KEY;
       const epoch = recEpoch;
       let syncRaw, localRaw;
       try {
         [syncRaw, localRaw] = await Promise.all([
-          chrome.storage.sync.get(SQZ.SETTINGS_KEY),
+          withSettings ? chrome.storage.sync.get(SQZ.SETTINGS_KEY) : null,
           chrome.storage.local.get(key),
         ]);
-      } catch (err) {
-        if (orphaned()) return teardown();
-        throw err;
+      } catch (e) {
+        if (orphaned()) return teardown(); // reload raced the event's guard
+        throw e;
       }
-      if (KEY !== key || recEpoch !== epoch) return; // superseded while reading
-      settings = SQZ.mergeSettings(syncRaw[SQZ.SETTINGS_KEY]);
+      if (KEY !== key || recEpoch !== epoch) return;
+      if (withSettings) settings = SQZ.mergeSettings(syncRaw[SQZ.SETTINGS_KEY]);
       rec = localRaw[key] ?? null;
       applyRecord();
-      applySettings();
+      if (withSettings) applySettings();
+    }
+
+    async function onUrlChanged() {
+      await ready;
+      const key = SQZ.pageKey(location.href);
+      if (key === KEY) return;
+      // Adopt the new key immediately, so a user action during the read
+      // below persists under the page they are looking at. Accepted edge: a
+      // toggle in that sub-100ms window writes the OLD record's widths under
+      // this key (the epoch bump then discards our stale read — the user's
+      // write wins deliberately, and the next drag overwrites the widths).
+      KEY = key;
+      await refreshRecord(false);
+    }
+
+    async function onPageShow(e) {
+      if (!e.persisted) return;
+      await ready;
+      // Back from the bfcache; storage (and the URL) may have moved on
+      // while the page was frozen.
+      KEY = SQZ.pageKey(location.href);
+      await refreshRecord(true);
     }
 
     function onBeforePrint() {

@@ -3,16 +3,16 @@
 // that were already open when the extension was installed or reloaded.
 importScripts('shared/defaults.js');
 
-// Pre-0.2 versions stored one record per origin under 'site:'; the schema
+// Pre-release builds stored one record per origin under 'site:'; the schema
 // is now one record per page URL under 'page:'. Drop the dead data once.
 chrome.runtime.onInstalled.addListener(async () => {
   const all = await chrome.storage.local.get(null);
   const stale = Object.keys(all).filter((k) => k.startsWith(SQZ.LEGACY_SITE_PREFIX));
   if (stale.length) await chrome.storage.local.remove(stale);
 
-  // Fixed-bar squeezing is always on since 0.4; a stored `squeezeFixed:
-  // false` from an older version must not linger (nothing reads it, but a
-  // stale flag in storage invites confusion).
+  // Fixed-bar squeezing is always on; a stored `squeezeFixed: false` from a
+  // pre-release build must not linger (nothing reads it, but a stale flag
+  // in storage invites confusion).
   const raw = await chrome.storage.sync.get(SQZ.SETTINGS_KEY);
   const settings = raw[SQZ.SETTINGS_KEY];
   if (settings && 'squeezeFixed' in settings) {
@@ -58,6 +58,9 @@ function flashBadge(tabId) {
 chrome.action.onClicked.addListener(async (tab) => {
   const tabId = tab?.id;
   if (tabId === undefined || tabId === chrome.tabs.TAB_ID_NONE) return;
+  // A ✕ from an earlier click sticks around if the worker was killed before
+  // flashBadge's clear timer fired; wipe the slate on every click.
+  chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
   const toggle = () => chrome.tabs.sendMessage(tabId, { type: SQZ.MSG.TOGGLE });
   try {
     await toggle();

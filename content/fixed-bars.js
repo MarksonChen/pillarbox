@@ -36,6 +36,13 @@ SQZ.fixedBars ??= (() => {
     return rect.left < widths.left - 1 || rect.right > vw - widths.right + 1;
   }
 
+  // Positioning category: fixed/absolute boxes ignore the html margins and
+  // need viewport insets; anything else is normal flow and gets width
+  // overrides. classify() and reconsider() must agree on this split.
+  function modeOf(position) {
+    return position === 'fixed' || position === 'absolute' ? 'inset' : 'flow';
+  }
+
   // Absolute boxes must be anchored to the initial containing block to be
   // adoptable. Anything below a positioned/transformed ancestor moves with
   // that ancestor — insetting it too would compound the squeeze (nested
@@ -72,9 +79,9 @@ SQZ.fixedBars ??= (() => {
     // <body> itself can qualify: modal scroll-locks often fix it, and since
     // fixed boxes ignore the html margins, insetting it is the correct
     // single squeeze, not a double one.
-    if (cs.position === 'fixed') return { mode: 'inset' };
-    if (cs.position === 'absolute') {
-      return anchoredToViewport(el) ? { mode: 'inset' } : null;
+    if (modeOf(cs.position) === 'inset') {
+      if (cs.position === 'absolute' && !anchoredToViewport(el)) return null;
+      return { mode: 'inset' };
     }
     // Normal flow. Width overrides only make sense on HTML block-level boxes.
     if (!(el instanceof HTMLElement) || cs.display === 'inline') return null;
@@ -166,12 +173,31 @@ SQZ.fixedBars ??= (() => {
     }
     let pos = null;
     try { pos = getComputedStyle(el).position; } catch {}
-    const mode = pos === 'fixed' || pos === 'absolute' ? 'inset' : pos ? 'flow' : null;
+    const mode = pos ? modeOf(pos) : null;
     if (mode === entry.mode) {
       assertOne(el, entry); // page rewrote its inline style: re-assert
     } else {
       release(el);
       if (mode) consider(el); // e.g. a bar just turned fixed: adopt fresh
+    }
+  }
+
+  // A class/style change anywhere can turn an element into the containing
+  // block (positioned/transformed) of a managed absolute box. Its insets
+  // would then resolve against that ancestor — which the html margins
+  // already squeeze — and compound. Release such boxes; classify() refuses
+  // non-anchored absolutes, so nothing re-adopts them.
+  function recheckAnchors(changedEls) {
+    for (const [el, entry] of managed) {
+      if (entry.mode !== 'inset') continue;
+      let pos = null;
+      try { pos = getComputedStyle(el).position; } catch {}
+      if (pos !== 'absolute') continue;
+      let underChanged = false;
+      for (const changed of changedEls) {
+        if (changed !== el && changed.contains(el)) { underChanged = true; break; }
+      }
+      if (underChanged && !anchoredToViewport(el)) release(el);
     }
   }
 
@@ -206,9 +232,11 @@ SQZ.fixedBars ??= (() => {
     if (SQZ.orphanGuard?.()) return;
     if (!widths) return;
     let removedAny = false;
+    let attrTargets = null;
     for (const m of mutations) {
       if (m.type === 'attributes') {
         reconsider(m.target);
+        (attrTargets ??= new Set()).add(m.target);
         continue;
       }
       for (const node of m.addedNodes) {
@@ -226,6 +254,7 @@ SQZ.fixedBars ??= (() => {
       }
       removedAny ||= m.removedNodes.length > 0;
     }
+    if (attrTargets) recheckAnchors(attrTargets);
     if (removedAny) {
       // managed is tiny (a handful of bars at most), so a full prune is cheap.
       for (const el of [...managed.keys()]) {
