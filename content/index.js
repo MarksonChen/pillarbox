@@ -14,6 +14,7 @@ if (!SQZ.booted) {
     let busy = false;      // drops overlapping toggles (one net transition)
     let dragging = false;  // ignore cross-tab width sync mid-drag
     let resizeRaf = 0;
+    let torndown = false;  // orphaned (extension reloaded); everything detached
     let recEpoch = 0;      // bumped on every local rec write; stale async reads bail
     let settings = SQZ.mergeSettings(null);
     let rec = null;        // {on, left, right} | null — source of truth, stored unclamped
@@ -37,14 +38,31 @@ if (!SQZ.booted) {
     addEventListener('popstate', onUrlChanged);
     addEventListener('hashchange', onUrlChanged);
 
+    // The observers in squeeze.js / fixed-bars.js probe this before
+    // re-asserting styles. Without it, an orphaned script's watcher and a
+    // freshly injected script's watcher would each "correct" the other's
+    // html margins in an unbounded microtask chain the moment they disagree.
+    SQZ.orphanGuard = () => {
+      if (!orphaned()) return false;
+      teardown();
+      return true;
+    };
+
     const ready = init();
 
     async function init() {
       cleanupStaleArtifacts();
-      const [syncRaw, localRaw] = await Promise.all([
-        chrome.storage.sync.get(SQZ.SETTINGS_KEY),
-        chrome.storage.local.get(KEY),
-      ]);
+      let syncRaw, localRaw;
+      try {
+        [syncRaw, localRaw] = await Promise.all([
+          chrome.storage.sync.get(SQZ.SETTINGS_KEY),
+          chrome.storage.local.get(KEY),
+        ]);
+      } catch (e) {
+        if (orphaned()) return teardown(); // reload raced the boot
+        throw e;
+      }
+      if (torndown) return; // orphaned while the read was in flight
       settings = SQZ.mergeSettings(syncRaw[SQZ.SETTINGS_KEY]);
       rec = localRaw[KEY] ?? null;
       if (rec?.on) {
@@ -143,6 +161,34 @@ if (!SQZ.booted) {
       phase = 'dormant';
     }
 
+    function orphaned() {
+      // Reloading, updating or removing the extension orphans this script:
+      // chrome.runtime.id comes back undefined and every chrome.* call throws
+      // "Extension context invalidated". No toggle can ever reach us again.
+      return !chrome.runtime?.id;
+    }
+
+    // Detected lazily — on the first SPA navigation, resize, storage call or
+    // style re-assertion that would have failed — the orphan restores the
+    // page and detaches completely. The next toolbar click injects a fresh
+    // script that takes over from storage.
+    function teardown() {
+      if (torndown) return;
+      torndown = true;
+      SQZ.orphanGuard = () => true;
+      removeEventListener('pageshow', onPageShow);
+      removeEventListener('beforeprint', onBeforePrint);
+      removeEventListener('afterprint', onAfterPrint);
+      removeEventListener('resize', onResize);
+      if (globalThis.navigation?.removeEventListener) {
+        navigation.removeEventListener('navigatesuccess', onUrlChanged);
+      }
+      removeEventListener('popstate', onUrlChanged);
+      removeEventListener('hashchange', onUrlChanged);
+      if (phase === 'active') disable();
+      else phase = 'dormant';
+    }
+
     function applyWidthsToPage() {
       const { left, right } = effWidths();
       SQZ.panels.setWidths(left, right);
@@ -191,6 +237,7 @@ if (!SQZ.booted) {
         await chrome.storage.local.set({ [KEY]: rec });
       } catch {
         echoes.delete(stamp);
+        if (orphaned()) teardown();
       }
     }
 
@@ -254,6 +301,7 @@ if (!SQZ.booted) {
       if (resizeRaf) return;
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = 0;
+        if (orphaned()) return teardown();
         if (phase !== 'active' || suspended || dragging) return;
         // Re-clamp for the new viewport; rec itself stays unclamped so a
         // temporarily small window doesn't permanently shrink saved widths.
@@ -262,12 +310,19 @@ if (!SQZ.booted) {
     }
 
     async function onUrlChanged() {
+      if (orphaned()) return teardown();
       await ready;
       const key = SQZ.pageKey(location.href);
       if (key === KEY) return;
       KEY = key;
       const epoch = recEpoch;
-      const raw = await chrome.storage.local.get(key);
+      let raw;
+      try {
+        raw = await chrome.storage.local.get(key);
+      } catch (e) {
+        if (orphaned()) return teardown(); // reload raced the check above
+        throw e;
+      }
       // Bail if a newer navigation OR a local write (a toggle landing while
       // this read was in flight) has already superseded this snapshot.
       if (KEY !== key || recEpoch !== epoch) return;
@@ -277,15 +332,22 @@ if (!SQZ.booted) {
 
     async function onPageShow(e) {
       if (!e.persisted) return;
+      if (orphaned()) return teardown();
       await ready;
       // Back from the bfcache; storage may have moved on while frozen.
       KEY = SQZ.pageKey(location.href);
       const key = KEY;
       const epoch = recEpoch;
-      const [syncRaw, localRaw] = await Promise.all([
-        chrome.storage.sync.get(SQZ.SETTINGS_KEY),
-        chrome.storage.local.get(key),
-      ]);
+      let syncRaw, localRaw;
+      try {
+        [syncRaw, localRaw] = await Promise.all([
+          chrome.storage.sync.get(SQZ.SETTINGS_KEY),
+          chrome.storage.local.get(key),
+        ]);
+      } catch (err) {
+        if (orphaned()) return teardown();
+        throw err;
+      }
       if (KEY !== key || recEpoch !== epoch) return; // superseded while reading
       settings = SQZ.mergeSettings(syncRaw[SQZ.SETTINGS_KEY]);
       rec = localRaw[key] ?? null;

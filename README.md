@@ -71,6 +71,14 @@ put their content hard-left, hard-right, or across the full window width.
   `visibility:visible !important` inline, because some sites hide all
   undefined custom elements as an anti-flicker guard (reddit's
   `:not(:defined){visibility:hidden}`).
+- **Surviving extension reloads**: reloading or updating the extension
+  orphans the content script in every open tab — `chrome.runtime.id` goes
+  undefined and each `chrome.*` call throws "Extension context invalidated".
+  On its next wake-up (SPA navigation, resize, storage write, or a style
+  re-assertion), an orphaned script restores the page and detaches
+  completely instead of erroring or fighting the freshly injected script
+  over the html margins; the next toolbar click injects a new script that
+  takes over from storage.
 
 ## Known limitations (by design)
 

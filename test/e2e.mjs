@@ -70,6 +70,8 @@ class CDP {
         this.pending.delete(msg.id);
         if (msg.error) reject(new Error(`${msg.error.message} (${msg.error.code})`));
         else resolve(msg.result);
+      } else if (msg.method) {
+        this.onEvent?.(msg);
       }
     };
   }
@@ -624,6 +626,44 @@ async function main() {
       vwRestored.shellW === '' && vwRestored.innerW === '100vw'
         && !vwRestored.brkStyle.includes('margin'),
       JSON.stringify(vwRestored));
+
+    // ---------- extension reload orphans the content script ----------
+    // Reloading (or updating) the extension kills chrome.* in already-open
+    // tabs. The orphaned script must tear itself down on its next wake-up:
+    // restore the page, never call dead chrome.storage (the
+    // "Extension context invalidated" console error), never fight a fresh
+    // script's styles. Last section — the reload does not resurrect an
+    // unpacked extension under --load-extension, so the worker is gone after.
+    const orphPage = await openPage(`${BASE}/page.html?orphan`);
+    await cdp.send('Runtime.enable', {}, orphPage);
+    const orphExceptions = [];
+    cdp.onEvent = (msg) => {
+      if (msg.method === 'Runtime.exceptionThrown' && msg.sessionId === orphPage) {
+        orphExceptions.push(msg.params.exceptionDetails.exception?.description
+          ?? msg.params.exceptionDetails.text);
+      }
+    };
+    await sleep(300);
+    const orphOn = await toggleViaWorker(`${BASE}/page.html?orphan`);
+    check('orphan-section page toggles on', orphOn && orphOn.on === true, JSON.stringify(orphOn));
+    await until(async () => (await evalIn(orphPage, SNAP)).ml === '200px', 4000, 'orphan page squeezed');
+    // No await: the reload destroys the worker session, so no reply comes.
+    cdp.send('Runtime.evaluate', { expression: 'chrome.runtime.reload()' }, sw).catch(() => {});
+    await sleep(1200);
+    // First wake-up: a foreign write to the html style attribute. The old
+    // squeeze watcher must tear the orphan down instead of re-asserting.
+    await evalIn(orphPage, 'document.documentElement.style.color = "red", "poked"');
+    const orphDown = await until(async () => {
+      const v = await evalIn(orphPage, SNAP);
+      return v.ml === '0px' && !v.host ? v : null;
+    }, 4000, 'orphan teardown restored the page');
+    check('orphaned script restores the page on its first wake-up', true, JSON.stringify(
+      { ml: orphDown.ml, host: orphDown.host }));
+    // SPA navigation after teardown must be a no-op, not a storage call.
+    await evalIn(orphPage, 'history.pushState({}, "", "/page.html?orphan2"), "pushed"');
+    await sleep(600);
+    check('orphan logs no "Extension context invalidated" errors',
+      orphExceptions.length === 0, orphExceptions.join(' | '));
   } finally {
     cleanup();
   }

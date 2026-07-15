@@ -202,6 +202,8 @@ SQZ.fixedBars ??= (() => {
   }
 
   function onMutations(mutations) {
+    // Same orphan rule as the squeeze watcher: never fight a fresh script.
+    if (SQZ.orphanGuard?.()) return;
     if (!widths) return;
     let removedAny = false;
     for (const m of mutations) {

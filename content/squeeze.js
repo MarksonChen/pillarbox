@@ -60,6 +60,9 @@ SQZ.squeeze ??= (() => {
   function watch() {
     if (observer) return;
     observer = new MutationObserver(() => {
+      // An orphaned script (extension reloaded) must never re-assert against
+      // a fresh script's margins — the guard tears this life down instead.
+      if (SQZ.orphanGuard?.()) return;
       if (current) assertStyles();
     });
     observer.observe(document.documentElement, {
