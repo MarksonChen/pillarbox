@@ -128,6 +128,18 @@ $('#openShortcuts').addEventListener('click', () => {
   chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
 });
 
+// Gesture legend: any modifier key mirrors a drag to the other sidebar.
+// Show this platform's modifiers as keycaps.
+function renderModKeys() {
+  const mac = navigator.platform.startsWith('Mac');
+  const box = $('#modKeys');
+  for (const mod of mac ? ['⇧', '⌃', '⌥', '⌘'] : ['Shift', 'Ctrl', 'Alt']) {
+    const key = document.createElement('kbd');
+    key.textContent = mod;
+    box.append(key);
+  }
+}
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync' || !(SQZ.SETTINGS_KEY in changes)) return;
   if (selfWrites > 0) {
@@ -139,3 +151,4 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 loadSettings();
 loadShortcut();
+renderModKeys();

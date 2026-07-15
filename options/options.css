@@ -197,6 +197,8 @@ button.ghost:hover { border-color: var(--accent); color: var(--accent); backgrou
 
 .shortcutwrap { display: flex; align-items: center; gap: 10px; }
 .keys { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.gesture { color: var(--muted); text-align: right; }
+.gesture kbd + kbd { margin-left: 3px; }
 kbd {
   min-width: 26px;
   padding: 3px 8px;

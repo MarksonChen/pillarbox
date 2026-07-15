@@ -8,9 +8,13 @@ put their content hard-left, hard-right, or across the full window width.
   on the current site. The page content genuinely **reflows** into the inner
   region — it is not just covered.
 - **Drag** a sidebar's inner edge to resize it; left and right are
-  independent. **Double-click** a handle to collapse/restore that side.
-  A sidebar can go past the middle when the other side is narrow — the only
-  limit is that at least 200px of page always stays visible between them.
+  independent. Hold **any modifier key** (⇧ ⌃ ⌥ ⌘) while dragging to move
+  both sidebars together by the same amount — press or release the key
+  mid-drag to link/unlink. **Double-click** a handle to collapse/restore
+  that side, or double-click a sidebar's empty space to restore both sides
+  to your default widths. A sidebar can go past the middle when the other side is narrow
+  — the only limit is that at least 200px of page always stays visible
+  between them.
 - **Per-page memory with auto-restore**: each exact URL (path + query; the
   hash is ignored) remembers whether the sidebars are on and how wide they
   are, and re-applies that on every reload and future visit until you toggle
@@ -24,9 +28,9 @@ put their content hard-left, hard-right, or across the full window width.
   reflow on their own.
 - **Options page**: live preview, theme (Auto/Light/Dark), sidebar colors
   for the light and dark themes, default widths, the pixel readout while
-  resizing (off by default), and the current keyboard shortcut with a jump
-  to Chrome's shortcut editor (Chrome offers no API to set shortcuts from an
-  extension page).
+  resizing (off by default), a gesture reference, and the current keyboard
+  shortcut with a jump to Chrome's shortcut editor (Chrome offers no API to
+  set shortcuts from an extension page).
 
 ## Install (any Chrome)
 

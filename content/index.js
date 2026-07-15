@@ -118,6 +118,7 @@ if (!SQZ.booted) {
         onDragStart,
         onDrag,
         onDragEnd,
+        onReset,
       });
       startFixedBars();
       phase = 'active';
@@ -233,6 +234,13 @@ if (!SQZ.booted) {
     function onDragEnd() {
       dragging = false;
       persist({ on: true });
+    }
+
+    function onReset() {
+      // Double-click on a panel's empty space: both sides back to the
+      // defaults. persist() updates rec synchronously before writing.
+      persist({ on: true, left: settings.defaultLeft, right: settings.defaultRight });
+      applyWidthsToPage();
     }
 
     function onResize() {

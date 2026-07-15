@@ -306,11 +306,12 @@ async function main() {
 
     // Drag the left handle from 200 to 320 with synthesized mouse input
     // (the handle straddles the panel edge, so x=200 hits it).
-    const mouse = (type, x, y, clickCount = 0) => cdp.send('Input.dispatchMouseEvent', {
+    const mouse = (type, x, y, clickCount = 0, modifiers = 0) => cdp.send('Input.dispatchMouseEvent', {
       type, x, y, button: 'left',
       buttons: type === 'mouseReleased' ? 0 : 1,
-      clickCount, pointerType: 'mouse',
+      clickCount, pointerType: 'mouse', modifiers,
     }, page);
+    const SHIFT = 8; // CDP modifier bitmask: Alt=1 Ctrl=2 Meta=4 Shift=8
     await mouse('mousePressed', 200, 450, 1);
     for (const x of [206, 230, 270, 300, 320]) await mouse('mouseMoved', x, 450);
     await mouse('mouseReleased', 320, 450, 1);
@@ -348,6 +349,63 @@ async function main() {
     for (const x of [1000, 700, 400, 320]) await mouse('mouseMoved', x, 450);
     await mouse('mouseReleased', 320, 450, 1);
     await until(async () => (await evalIn(page, SNAP)).ml === '320px', 3000, 'drag back to 320');
+
+    // Mirrored drag: holding any modifier while dragging moves the other
+    // side by the same amount; releasing it mid-drag un-links again.
+    // Shift-drag left 320 -> 420 (right follows 200 -> 300), then drop the
+    // modifier and pull back to 380 (right must stay at 300).
+    await mouse('mousePressed', 320, 450, 1);
+    for (const x of [326, 360, 400, 420]) await mouse('mouseMoved', x, 450, 0, SHIFT);
+    await mouse('mouseMoved', 380, 450);
+    await mouse('mouseReleased', 380, 450, 1);
+    s = await until(async () => {
+      const v = await evalIn(page, SNAP);
+      return v.ml === '380px' && v.mr === '300px' ? v : null;
+    }, 3000, 'mirrored drag + mid-drag unlink');
+    check('modifier-drag moves both sides; releasing mid-drag un-links', true,
+      `ml=${s.ml} mr=${s.mr}`);
+
+    // Mirrored min-gap clamp: both sides must stop TOGETHER when only the
+    // 200px gap is left. offset = 300-380 = -80, budget = 1425-200 = 1225,
+    // so left stops at floor((1225+80)/2) = 652 and right at 572.
+    await mouse('mousePressed', 380, 450, 1);
+    for (const x of [400, 800, 1380]) await mouse('mouseMoved', x, 450, 0, SHIFT);
+    await mouse('mouseReleased', 1380, 450, 1);
+    s = await until(async () => {
+      const v = await evalIn(page, SNAP);
+      return v.ml === '652px' && v.mr === '572px' ? v : null;
+    }, 3000, 'mirrored min-gap clamp');
+    check('mirrored drag stops both sides at the min gap', true, `ml=${s.ml} mr=${s.mr}`);
+
+    // Mirror works from the right handle too; shift-drag it (at 1425-572 =
+    // 853) out to 1225: right 572 -> 200, left follows 652 -> 280.
+    await mouse('mousePressed', 853, 450, 1);
+    for (const x of [860, 1000, 1225]) await mouse('mouseMoved', x, 450, 0, SHIFT);
+    await mouse('mouseReleased', 1225, 450, 1);
+    s = await until(async () => {
+      const v = await evalIn(page, SNAP);
+      return v.ml === '280px' && v.mr === '200px' ? v : null;
+    }, 3000, 'mirrored drag from the right handle');
+    check('modifier-drag mirrors from the right handle too', true, `ml=${s.ml} mr=${s.mr}`);
+
+    // Double-click on a panel's empty space (x=100, well away from the
+    // handle at ~280) resets both sides to the defaults (200/200).
+    await mouse('mousePressed', 100, 450, 1); await mouse('mouseReleased', 100, 450, 1);
+    await mouse('mousePressed', 100, 450, 2); await mouse('mouseReleased', 100, 450, 2);
+    s = await until(async () => {
+      const v = await evalIn(page, SNAP);
+      return v.ml === '200px' && v.mr === '200px' ? v : null;
+    }, 3000, 'dblclick empty space resets to defaults');
+    check('dblclick on a panel\'s empty space restores default widths', true,
+      `ml=${s.ml} mr=${s.mr}`);
+    // Put the left side back at 320 for the persistence checks below.
+    await mouse('mousePressed', 200, 450, 1);
+    for (const x of [220, 280, 320]) await mouse('mouseMoved', x, 450);
+    await mouse('mouseReleased', 320, 450, 1);
+    await until(async () => {
+      const v = await evalIn(page, SNAP);
+      return v.ml === '320px' && v.mr === '200px';
+    }, 3000, 'plain drag restores 320/200');
 
     // Per-URL memory: a same-document (SPA) navigation to another URL has
     // no record and must close the sidebars; navigating back reopens them
@@ -440,7 +498,16 @@ async function main() {
       3000, 'preview reflects the dark sidebar color');
     check('options: live preview follows the settings', true);
 
-    const shot3 = await cdp.send('Page.captureScreenshot', { format: 'png' }, opts);
+    // The gesture reference renders, with platform modifier keycaps filled in.
+    const gestures = await evalIn(opts, `({
+      rows: [...document.querySelectorAll('.gesture')].length,
+      modKeys: document.querySelectorAll('#modKeys kbd').length,
+    })`);
+    check('options: gesture reference rendered with modifier keycaps',
+      gestures.rows === 5 && gestures.modKeys >= 3, JSON.stringify(gestures));
+
+    const shot3 = await cdp.send('Page.captureScreenshot',
+      { format: 'png', captureBeyondViewport: true }, opts);
     const shotPath3 = path.join(SHOT_DIR, 'options.png');
     writeFileSync(shotPath3, Buffer.from(shot3.data, 'base64'));
     console.log('screenshot: ' + shotPath3);

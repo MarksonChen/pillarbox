@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Pillarbox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Squeeze page content inward between two resizable, empty sidebars. Remembers widths per page.",
   "permissions": ["storage", "scripting"],
   "host_permissions": ["<all_urls>"],

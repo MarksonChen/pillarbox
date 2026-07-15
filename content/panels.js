@@ -155,10 +155,26 @@ SQZ.panels ??= (() => {
     host?.style.setProperty('display', visible ? 'block' : 'none', 'important');
   }
 
+  // Mirrored drag: while a modifier key is held, the far panel keeps a fixed
+  // offset from the dragged (near) one, so both move by the same amount and
+  // backtracking retraces the same widths. The pair is clamped jointly: both
+  // sides stop together at the MIN_GAP limit, and neither goes below 0.
+  function mirrorPair(px, offset) {
+    const budget = Math.max(0, SQZ.viewportWidth() - SQZ.MIN_GAP);
+    let near = Math.max(0, Math.min(Math.round(px) || 0, budget));
+    const over = near + Math.max(0, near + offset) - budget;
+    if (over > 0) near = Math.max(0, near - Math.ceil(over / 2));
+    const far = Math.min(Math.max(0, near + offset), budget - near);
+    return { near, far };
+  }
+
   function wireDrag(side, handle, readout) {
+    const other = side === 'left' ? 'right' : 'left';
     let pointerId = null;
     let startX = 0;
     let started = false;
+    let mirroring = false; // modifier key held: the far side follows
+    let mirrorOffset = 0;  // far width - near width, frozen when engaging
 
     handle.addEventListener('pointerdown', (e) => {
       if (!callbacks || !e.isPrimary || e.button !== 0) return;
@@ -182,12 +198,28 @@ SQZ.panels ??= (() => {
         lockSelection();
         callbacks.onDragStart?.(side);
       }
-      const other = side === 'left' ? 'right' : 'left';
-      const px = SQZ.clampDrag(
-        side === 'left' ? e.clientX : SQZ.viewportWidth() - e.clientX,
-        widths[other]);
-      widths[side] = px;
-      if (px > 0) lastNonZero[side] = px;
+      const pointerPx = side === 'left' ? e.clientX : SQZ.viewportWidth() - e.clientX;
+      // Any modifier key links the far side: it moves by the same amount for
+      // as long as the key is held (pressing/releasing mid-drag both work).
+      const modifier = e.altKey || e.ctrlKey || e.metaKey || e.shiftKey;
+      if (modifier !== mirroring) {
+        mirroring = modifier;
+        if (mirroring) mirrorOffset = widths[other] - widths[side];
+        els?.[other].handle.classList.toggle('active', mirroring);
+        if (appearance.showReadout) {
+          els?.[other].readout.classList.toggle('show', mirroring);
+        }
+      }
+      if (mirroring) {
+        const pair = mirrorPair(pointerPx, mirrorOffset);
+        widths[side] = pair.near;
+        widths[other] = pair.far;
+      } else {
+        widths[side] = SQZ.clampDrag(pointerPx, widths[other]);
+      }
+      for (const s of ['left', 'right']) {
+        if (widths[s] > 0) lastNonZero[s] = widths[s];
+      }
       applyWidths();
       // Report the full displayed pair: the page must be squeezed to exactly
       // what the panels show, not to a re-clamp of stale stored values.
@@ -199,9 +231,14 @@ SQZ.panels ??= (() => {
       pointerId = null;
       if (!started) return;
       started = false;
+      mirroring = false;
       host?.classList.remove('dragging');
       handle.classList.remove('active');
       readout.classList.remove('show');
+      if (els) {
+        els[other].handle.classList.remove('active');
+        els[other].readout.classList.remove('show');
+      }
       unlockSelection();
       callbacks?.onDragEnd?.(side);
     };
@@ -210,7 +247,6 @@ SQZ.panels ??= (() => {
 
     handle.addEventListener('dblclick', () => {
       if (!callbacks) return;
-      const other = side === 'left' ? 'right' : 'left';
       const target = widths[side] > 0
         ? 0
         : SQZ.clampDrag(lastNonZero[side], widths[other]);
@@ -232,6 +268,7 @@ SQZ.panels ??= (() => {
       onDragStart: opts.onDragStart,
       onDrag: opts.onDrag,
       onDragEnd: opts.onDragEnd,
+      onReset: opts.onReset,
     };
     widths = { left: opts.left, right: opts.right };
     for (const side of ['left', 'right']) {
@@ -271,6 +308,12 @@ SQZ.panels ??= (() => {
       root.append(panel);
       els[side] = { panel, handle, readout };
       wireDrag(side, handle, readout);
+      // Double-click on a panel's empty space: back to the default widths.
+      // Handle dblclicks bubble up here too — those collapse/restore instead.
+      panel.addEventListener('dblclick', (e) => {
+        if (e.target !== panel) return;
+        callbacks?.onReset?.();
+      });
     }
     applyWidths();
     setAppearance(opts.appearance);
