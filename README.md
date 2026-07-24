@@ -18,13 +18,15 @@ put their content hard-left, hard-right, or across the full window width.
 - **Zoom-stable**: sidebar widths are kept in pixels at 100% page zoom, so
   a sidebar stays the same size on screen at any zoom level — zooming
   changes the size of the page's text, not the width of the pillars.
-- **Per-URL default widths**: optional rules map a URL regex to its own
-  default pair (e.g. `https://www\.zhihu\.com/question` → 425 × 425,
-  `https://www\.nature\.com/articles` → 530 × 0). The first matching rule
-  decides what a page gets on its first enable and what the double-click
-  reset returns to; pages you have already resized keep their saved widths.
-  Patterns are tested against the URL without its `#hash`; invalid regexes
-  are flagged in the options page and skipped.
+- **Per-URL default widths**: rules map a URL regex to its own default
+  pair. Two ship out of the box — `https://www\.nature\.com/articles` →
+  535 × 0 and `https://www\.zhihu\.com/question` → 425 × 425 — and are
+  ordinary rules in the options page: edit or remove them freely (the
+  first save persists your list wholesale, so removal sticks). The first
+  matching rule decides what a page gets on its first enable and what the
+  double-click reset returns to; pages you have already resized keep
+  their saved widths. Patterns are tested against the URL without its
+  `#hash`; invalid regexes are flagged in the options page and skipped.
 - **Per-page memory with auto-restore**: each exact URL (path + query; the
   hash is ignored) remembers whether the sidebars are on and how wide they
   are, and re-applies that on every reload and future visit until you toggle
@@ -152,7 +154,8 @@ test/                  test pages + end-to-end script
 
 State: `chrome.storage.sync['settings']` holds `{theme, defaultLeft,
 defaultRight, colorLight, colorDark, showReadout, rules}` (`rules` is an
-ordered list of `{pattern, left, right}` — first matching regex wins);
+ordered list of `{pattern, left, right}` — first matching regex wins;
+two rules ship as defaults until the first options save);
 `chrome.storage.local['page:<origin+path+query>']` holds `{on, left, right, t}`
 per page (widths in px at 100% zoom; `t` is the last-used timestamp driving
 the 1000-page LRU cap); `chrome.storage.local['zoom:<origin>']` caches an

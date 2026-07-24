@@ -634,12 +634,22 @@ async function main() {
       colorLight: document.getElementById('colorLight').value,
       colorDark: document.getElementById('colorDark').value,
       pageTheme: document.documentElement.dataset.theme,
+      ruleRows: document.querySelectorAll('#rules .rule').length,
+      rule0: document.querySelector('.rule-pattern')?.value,
+      rule0Left: document.querySelector('.rule-left')?.value,
+      rule0Right: document.querySelector('.rule-right')?.value,
     })`);
     check('options: current settings rendered (readout defaults off)',
       optState.theme === 'light' && optState.left === '200'
         && optState.readout === false && optState.colorLight === '#eef0f3'
         && optState.colorDark === '#1d2126' && optState.pageTheme === 'light',
       JSON.stringify(optState));
+    // Storage holds no `rules` key at this point, so the SHIPPED defaults
+    // must be showing: nature.com/articles 535x0 first, zhihu second.
+    check('options: shipped default rules rendered (nature 535x0, zhihu)',
+      optState.ruleRows === 2 && optState.rule0 === 'https://www\\.nature\\.com/articles'
+        && optState.rule0Left === '535' && optState.rule0Right === '0',
+      JSON.stringify({ rows: optState.ruleRows, rule0: optState.rule0 }));
 
     // Clicking the dark radio saves immediately and re-themes the page.
     await evalIn(opts, `document.querySelector('input[name="theme"][value="dark"]').click(); true`);
