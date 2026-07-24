@@ -17,7 +17,12 @@ if (!SQZ.booted) {
     let torndown = false;  // orphaned (extension reloaded); everything detached
     let recEpoch = 0;      // bumped on every local rec write; stale async reads bail
     let zoom = 1;          // page zoom factor; rec holds px at zoom 1
-    let zoomDpr = devicePixelRatio; // the dpr that went with `zoom`
+    let zoomDpr = devicePixelRatio; // the dpr observed when `zoom` was learned
+    let zoomConfirmed = false; // an authoritative (worker-sourced) factor arrived
+    let zoomConfirm = null;    // in-flight GET_ZOOM round-trip, deduped
+    let zoomHintWritten;       // last value persisted under ZKEY (null = absent)
+    let dprMq = null;          // matchMedia probe that fires when the dpr moves
+    const ZKEY = SQZ.zoomKey(location.origin);
     let settings = SQZ.mergeSettings(null);
     let rec = null;        // {on, left, right} | null — source of truth, stored unclamped
     const echoes = new Set(); // JSON stamps of our own storage writes
@@ -61,24 +66,32 @@ if (!SQZ.booted) {
 
     async function init() {
       cleanupStaleArtifacts();
-      let syncRaw, localRaw, zoomRaw;
+      let syncRaw, localRaw;
       try {
-        [syncRaw, localRaw, zoomRaw] = await Promise.all([
+        [syncRaw, localRaw] = await Promise.all([
           chrome.storage.sync.get(SQZ.SETTINGS_KEY),
-          chrome.storage.local.get(KEY),
-          fetchZoom(), // the origin may carry a remembered zoom level
+          chrome.storage.local.get([KEY, ZKEY]),
         ]);
       } catch (e) {
         if (orphaned()) return teardown(); // reload raced the boot
         throw e;
       }
       if (torndown) return; // orphaned while the read was in flight
-      setZoom(zoomRaw);
+      // The zoom hint rides the storage read we make anyway (no service-
+      // worker wake), so a zoomed page boots at its exact widths with no
+      // extra latency. Chrome remembers zoom per origin, so a hint written
+      // by any tab covers them all; the worker later confirms it (lazily
+      // for dormant pages — their widths aren't applied anywhere).
+      const hint = localRaw[ZKEY];
+      zoomHintWritten = typeof hint === 'number' ? hint : null;
+      adoptZoom(typeof hint === 'number' ? SQZ.sanitizeZoom(hint) : null);
+      watchDpr();
       settings = SQZ.mergeSettings(syncRaw[SQZ.SETTINGS_KEY]);
       rec = localRaw[KEY] ?? null;
       if (rec?.on) {
         enable();
         persist({}); // refresh the record's LRU timestamp
+        confirmZoom(); // verify the hint off the boot path
       } else {
         phase = 'dormant';
       }
@@ -130,38 +143,88 @@ if (!SQZ.booted) {
         SQZ.storedToCss(rec.right, zoom));
     }
 
-    // The tab's zoom factor lives in chrome.tabs, out of reach here; the
-    // service worker answers with it. Null on failure (worker torn down mid
-    // extension reload) — the caller then keeps the last known factor.
-    async function fetchZoom() {
-      try {
-        const res = await chrome.runtime.sendMessage({ type: SQZ.MSG.GET_ZOOM });
-        return res ? SQZ.sanitizeZoom(res.zoom) : null;
-      } catch {
-        return null;
-      }
-    }
+    // --- zoom tracking ---------------------------------------------------
+    // The authoritative factor lives in chrome.tabs, a worker round-trip
+    // away — far too slow to wait for while the user zooms (the page has
+    // already repainted by then, sidebars scaled wrong, then snapping back).
+    // What makes zooming flash-free instead: devicePixelRatio is
+    // zoom × display scale, and it has already moved by the time the resize
+    // event fires — inside the same rendering update that will paint the
+    // first zoomed frame. Dividing the old dpr out of the new one turns the
+    // last authoritative (zoom, dpr) pair into the exact new factor,
+    // synchronously; the worker is only asked to confirm afterwards, and
+    // only ever corrects the one case the ratio misreads (the window
+    // landing on a display with a different scale — dpr moved, zoom
+    // didn't). That correction is a rare async touch-up; the common path
+    // never waits on a message.
 
-    // Adopt a new factor; returns whether it actually changed. Re-anchors
-    // the dpr that onResize compares against, so learning a zoom level and
-    // noticing one can't fight each other.
-    function setZoom(next) {
+    // Adopt a factor; returns whether it actually changed. Always
+    // re-anchors zoomDpr, keeping the pair consistent for the next ratio.
+    // The epsilon swallows float noise from predicted ratios (e.g.
+    // 1.1000000000000001 vs the worker's exact 1.1), which would otherwise
+    // churn styles for invisible differences.
+    function adoptZoom(next) {
       zoomDpr = devicePixelRatio;
-      if (next === null || SQZ.sanitizeZoom(next) === zoom) return false;
-      zoom = SQZ.sanitizeZoom(next);
+      if (next === null || Math.abs(next - zoom) < 1e-6) return false;
+      zoom = next;
       SQZ.panels.setZoom(zoom);
       return true;
     }
 
-    // Re-query the authoritative factor and re-apply if it moved. A dpr
-    // change alone is not proof of a zoom change (the window may have moved
-    // to a display with a different scale), so the worker gets the last word.
-    async function syncZoom() {
-      const next = await fetchZoom();
-      if (torndown) return;
-      if (setZoom(next) && phase === 'active' && !suspended && !dragging) {
+    // Worker-sourced values additionally refresh the per-origin hint that
+    // makes the next boot on this origin exact without waiting for anyone.
+    // Only ≠100% is worth remembering; at 1 the key is removed.
+    function adoptConfirmed(v) {
+      zoomConfirmed = true;
+      if (adoptZoom(v) && phase === 'active' && !suspended && !dragging) {
         applyWidthsToPage();
       }
+      const hintValue = Math.abs(zoom - 1) < 1e-6 ? null : zoom;
+      if (hintValue !== zoomHintWritten) {
+        zoomHintWritten = hintValue;
+        (hintValue === null
+          ? chrome.storage.local.remove(ZKEY)
+          : chrome.storage.local.set({ [ZKEY]: hintValue })).catch(() => {});
+      }
+    }
+
+    // Ask the worker for the real factor. Deduped while in flight; callers
+    // that need certainty (first enable on a page) await it, everyone else
+    // fires and forgets. A reply raced by a newer prediction is fine: the
+    // worker reads the factor when the message arrives, and onZoomChange
+    // pushes the final word regardless.
+    function confirmZoom() {
+      zoomConfirm ??= (async () => {
+        let res;
+        try {
+          res = await chrome.runtime.sendMessage({ type: SQZ.MSG.GET_ZOOM });
+        } catch {
+          if (orphaned()) teardown();
+          return;
+        } finally {
+          zoomConfirm = null;
+        }
+        if (!torndown && res) adoptConfirmed(SQZ.sanitizeZoom(res.zoom));
+      })();
+      return zoomConfirm;
+    }
+
+    // Fires whenever devicePixelRatio changes for any reason. Zoom changes
+    // come with a resize and are predicted there; what this alone catches
+    // is the window moving to a display with a different scale (macOS: no
+    // resize event) — same zoom, new dpr — which must re-anchor the pair so
+    // a later prediction doesn't misread the ratio.
+    const onDprChange = guarded(() => {
+      watchDpr();
+      if (devicePixelRatio !== zoomDpr) confirmZoom();
+    });
+
+    // The probe matches the current dpr exactly, so any change unmatches
+    // it; re-armed against the new value on every firing.
+    function watchDpr() {
+      dprMq?.removeEventListener('change', onDprChange);
+      dprMq = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+      dprMq.addEventListener('change', onDprChange);
     }
 
     function appearanceFromSettings() {
@@ -236,6 +299,7 @@ if (!SQZ.booted) {
       for (const [target, type, fn] of domListeners) {
         target.removeEventListener(type, fn);
       }
+      dprMq?.removeEventListener('change', onDprChange);
       if (phase === 'active') disable();
       else phase = 'dormant';
     }
@@ -253,9 +317,7 @@ if (!SQZ.booted) {
           if (torndown) return;
           // Mid-drag the pointer is already dictating the widths; the next
           // pointermove converts through the new factor on its own.
-          if (setZoom(msg.zoom) && phase === 'active' && !suspended && !dragging) {
-            applyWidthsToPage();
-          }
+          adoptConfirmed(SQZ.sanitizeZoom(msg.zoom));
         });
         return; // nothing to respond
       }
@@ -269,8 +331,15 @@ if (!SQZ.booted) {
               disable();
               await persist({ on: false });
             } else {
-              enable();
-              await persist({ on: true });
+              // First enable in this life: the factor may still be the boot
+              // hint (or the default 1). The worker is provably awake — this
+              // toggle came from it — so certainty costs one fast round-trip
+              // instead of a visible width correction.
+              if (!zoomConfirmed) await confirmZoom();
+              if (!torndown) {
+                enable();
+                await persist({ on: true });
+              }
             }
           } finally {
             busy = false;
@@ -376,14 +445,17 @@ if (!SQZ.booted) {
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = 0;
         if (phase !== 'active' || suspended || dragging) return;
-        // A zoom change arrives here too (the layout viewport resizes), and
-        // devicePixelRatio — zoom times the display scale — has already
-        // moved with it. That makes it a free filter for "the zoom may have
-        // changed": ordinary window resizes leave it alone, so the worker is
-        // only asked when there is something to ask about.
+        // A zoom change resizes the layout viewport with devicePixelRatio
+        // already moved, and this rAF still runs inside the rendering
+        // update that paints the first zoomed frame (resize steps precede
+        // animation callbacks, which precede paint). Predicting the factor
+        // from the dpr ratio and applying it here is what makes zooming
+        // flash-free: the first zoomed frame already carries the corrected
+        // widths. The worker confirms afterwards and only ever overrides
+        // the rare misread (a cross-display drag that resized the window).
         if (devicePixelRatio !== zoomDpr) {
-          zoomDpr = devicePixelRatio; // don't re-ask on every frame of the reflow
-          syncZoom();
+          adoptZoom(zoom * (devicePixelRatio / zoomDpr));
+          confirmZoom();
         }
         // Re-clamp for the new viewport; rec itself stays unclamped so a
         // temporarily small window doesn't permanently shrink saved widths.
@@ -434,7 +506,7 @@ if (!SQZ.booted) {
       // Back from the bfcache; storage, the URL and the tab's zoom level
       // may all have moved on while the page was frozen.
       KEY = SQZ.pageKey(location.href);
-      await syncZoom();
+      await confirmZoom();
       await refreshRecord(true);
     }
 

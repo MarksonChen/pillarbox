@@ -25,6 +25,8 @@ SQZ.sanitizeColor = (value, fallback) =>
 SQZ.SETTINGS_KEY = 'settings';      // chrome.storage.sync
 SQZ.PAGE_PREFIX = 'page:';          // chrome.storage.local, one key per page URL
 SQZ.LEGACY_SITE_PREFIX = 'site:';   // pre-0.2 per-origin records, cleaned on install
+SQZ.ZOOM_PREFIX = 'zoom:';          // chrome.storage.local, per-origin zoom hint
+                                    // (only written while an origin sits ≠ 100%)
 SQZ.MSG = Object.freeze({
   TOGGLE: 'SQZ_TOGGLE',
   ZOOM: 'SQZ_ZOOM',         // worker -> content: the tab's zoom factor changed
@@ -50,6 +52,10 @@ SQZ.pageKey = (url) => {
   const u = new URL(url);
   return SQZ.PAGE_PREFIX + u.origin + u.pathname + u.search;
 };
+
+// Chrome's page zoom is itself remembered per origin, so the hint that
+// makes a zoomed boot exact-and-instant follows the same shape.
+SQZ.zoomKey = (origin) => SQZ.ZOOM_PREFIX + origin;
 
 SQZ.mergeSettings = (raw) => ({ ...SQZ.DEFAULT_SETTINGS, ...(raw ?? {}) });
 

@@ -79,12 +79,23 @@ put their content hard-left, hard-right, or across the full window width.
   the content column a second time on top of the zoom. Widths are stored as
   px at 100% zoom and divided by the tab's zoom factor on the way into the
   page (multiplied back on the way out of a drag); every clamp, panel and
-  inset in between stays in ordinary CSS px. The factor itself lives in
-  `chrome.tabs`, which content scripts can't reach, so the service worker
-  relays it — on request at boot and after a bfcache return, and as a push
-  from `tabs.onZoomChange`. Neither member needs a permission. A resize
-  whose `devicePixelRatio` moved is the cheap in-page hint that the zoom may
-  have changed, and the only thing that triggers a re-query.
+  inset in between stays in ordinary CSS px.
+
+  Learning the factor is latency-critical: the authoritative value lives in
+  `chrome.tabs` (worker round-trip — the page would repaint wrong, then
+  snap). Instead the factor is *predicted* in-page: `devicePixelRatio` is
+  zoom × display scale and has already moved when the resize event fires,
+  inside the rendering update that paints the first zoomed frame — so
+  dividing the old dpr out of the new one converts the last authoritative
+  (zoom, dpr) pair into the exact new factor, applied before that first
+  paint. Zooming is flash-free by construction. The service worker then
+  merely confirms (`tabs.getZoom` on request, `tabs.onZoomChange` as a
+  push — neither needs a permission) and only ever corrects the one case
+  the ratio misreads: a cross-display move, where dpr moved but zoom
+  didn't. Confirmed non-100% factors are cached per origin under
+  `zoom:<origin>` in `chrome.storage.local` — Chrome remembers zoom per
+  origin, so the hint rides the boot-time storage read and a zoomed page
+  auto-restores at exact widths with no worker on the boot path either.
 - **Surviving extension reloads**: reloading or updating the extension
   orphans the content script in every open tab — `chrome.runtime.id` goes
   undefined and each `chrome.*` call throws "Extension context invalidated".
@@ -136,7 +147,8 @@ State: `chrome.storage.sync['settings']` holds `{theme, defaultLeft,
 defaultRight, colorLight, colorDark, showReadout}`;
 `chrome.storage.local['page:<origin+path+query>']` holds `{on, left, right, t}`
 per page (widths in px at 100% zoom; `t` is the last-used timestamp driving
-the 1000-page LRU cap).
+the 1000-page LRU cap); `chrome.storage.local['zoom:<origin>']` caches an
+origin's confirmed zoom factor while it sits ≠ 100% (removed at 100%).
 
 ### Testing
 
@@ -160,6 +172,7 @@ node test/e2e.mjs
 
 The script launches a throwaway headless profile, toggles via the real
 message path, and asserts reflow, fixed-bar insetting, per-page auto-restore
-after reload, zoom-stable widths (change + zoomed page load), live settings
-flips, theming, and survival of a `style-src 'none'` CSP. It writes screenshots to `$SHOT_DIR` (default: OS
+after reload, zoom-stable widths (correct in the first zoomed frame, hint
+persistence, zoomed page load), live settings flips, theming, and survival
+of a `style-src 'none'` CSP. It writes screenshots to `$SHOT_DIR` (default: OS
 temp dir).

@@ -427,17 +427,41 @@ async function main() {
       return v.ml === '160px' && v.mr === '100px' && v.nav && near(v.nav.left, 160) ? v : null;
     };
 
+    // Zero-flash probe: the corrected margin must be observable inside the
+    // SAME rendering update that first reflects the zoomed viewport — long
+    // before any worker round-trip could land. The page's resize listener
+    // registers after the extension's, so its rAF runs after the
+    // prediction rAF and before paint; it must already see the new margin.
+    await evalIn(page, `window.__zoomProbe = new Promise((resolve) => {
+      addEventListener('resize', () => requestAnimationFrame(() =>
+        resolve(getComputedStyle(document.documentElement).marginLeft)), { once: true });
+    }), true`, false);
+
     await setZoomViaWorker(`${BASE}/page.html`, 2);
     s = await until(ZOOMED, 5000, 'zoom change re-applies widths through the factor');
     check('2x zoom halves the CSS px widths (constant size on screen)', true,
       `ml=${s.ml} mr=${s.mr} navLeft=${s.nav.left} cw=${s.cw}`);
+    const probed = await evalIn(page, `Promise.race([window.__zoomProbe,
+      new Promise((r) => setTimeout(() => r('no resize event'), 3000))])`);
+    check('corrected margin present in the first zoomed frame (no flash)',
+      probed === '160px', `probe saw ${probed}`);
     const zoomed = await evalIn(sw, `chrome.storage.local.get(${JSON.stringify(PAGE_KEY)})`);
     check('zooming leaves the stored (100%-zoom) widths untouched',
       zoomed[PAGE_KEY]?.left === 320 && zoomed[PAGE_KEY]?.right === 200,
       JSON.stringify(zoomed[PAGE_KEY]));
 
-    // Boot path: a fresh content script on an already-zoomed origin has to
-    // ask the worker for the factor before auto-restoring.
+    // The authoritative confirm persists a per-origin hint, which is what
+    // lets the next boot on this origin apply exact widths straight from
+    // the storage read (no service-worker round-trip on the boot path).
+    const ZOOM_KEY = `zoom:${BASE}`;
+    await until(async () => {
+      const h = await evalIn(sw, `chrome.storage.local.get(${JSON.stringify(ZOOM_KEY)})`);
+      return h[ZOOM_KEY] === 2;
+    }, 3000, 'per-origin zoom hint persisted');
+    check('per-origin zoom hint persisted while zoomed', true);
+
+    // Boot path: a fresh content script on an already-zoomed origin picks
+    // the factor up from the hint and auto-restores at exact widths.
     await evalIn(page, 'window.__sqzMark = 1; setTimeout(() => location.reload(), 0); true', false);
     s = await until(async () => {
       if (await evalIn(page, '!!window.__sqzMark')) return null; // old document
@@ -452,6 +476,11 @@ async function main() {
       return v.ml === '320px' && v.mr === '200px' && near(v.nav.left, 320);
     }, 5000, 'back to 100% zoom');
     check('back at 100% zoom the stored widths apply verbatim', true);
+    await until(async () => {
+      const h = await evalIn(sw, `chrome.storage.local.get(${JSON.stringify(ZOOM_KEY)})`);
+      return !(ZOOM_KEY in h);
+    }, 3000, 'zoom hint removed at 100%');
+    check('zoom hint removed when the origin returns to 100%', true);
 
     // Per-URL memory: a same-document (SPA) navigation to another URL has
     // no record and must close the sidebars; navigating back reopens them
