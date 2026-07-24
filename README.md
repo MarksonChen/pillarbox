@@ -46,9 +46,10 @@ put their content hard-left, hard-right, or across the full window width.
 - **Options page**: live preview, theme (Auto/Light/Dark), sidebar colors
   for the light and dark themes, default widths, per-URL width rules (a
   reorderable editor — first match wins — with live regex validation), the
-  pixel readout while resizing (off by default), a gesture reference, and
-  the current keyboard shortcut with a jump to Chrome's shortcut editor
-  (Chrome offers no API to set shortcuts from an extension page).
+  pixel readout while resizing (off by default), a gesture reference, the
+  current keyboard shortcut with a jump to Chrome's shortcut editor
+  (Chrome offers no API to set shortcuts from an extension page), and a
+  feedback button that opens the issue tracker.
 
 ## Install (any Chrome)
 

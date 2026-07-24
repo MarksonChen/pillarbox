@@ -234,6 +234,10 @@ $('#openShortcuts').addEventListener('click', () => {
   chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
 });
 
+$('#openIssue').addEventListener('click', () => {
+  chrome.tabs.create({ url: 'https://github.com/MarksonChen/pillarbox/issues/new' });
+});
+
 // Gesture legend: any modifier key means "both sides" (mirrored drag,
 // reset). Show this platform's modifiers as keycaps wherever they appear.
 function renderModKeys() {

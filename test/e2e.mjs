@@ -771,6 +771,15 @@ async function main() {
     }, 3000, 'removed rule saved');
     check('options: removing a rule saves', true);
 
+    // Feedback card: the button opens the issue tracker in a new tab.
+    await evalIn(opts, `(document.getElementById('openIssue').click(), true)`);
+    await until(async () => {
+      const tabs = await evalIn(sw, `chrome.tabs.query({})`);
+      return tabs.some((t) => ((t.pendingUrl || t.url) ?? '')
+        .startsWith('https://github.com/MarksonChen/pillarbox/issues/new'));
+    }, 3000, 'issue tab opened');
+    check('options: feedback button opens the issue tracker', true);
+
     await screenshot(opts, 'options.png', { captureBeyondViewport: true });
 
     // Echo regression: a save that changes nothing fires NO onChanged event,
