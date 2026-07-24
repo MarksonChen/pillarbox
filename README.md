@@ -10,11 +10,10 @@ put their content hard-left, hard-right, or across the full window width.
 - **Drag** a sidebar's inner edge to resize it; left and right are
   independent. Hold **any modifier key** (⇧ ⌃ ⌥ ⌘) while dragging to move
   both sidebars together by the same amount — press or release the key
-  mid-drag to link/unlink. **Double-click** a sidebar to collapse it
-  (double-click the thin handle at the screen edge to bring a collapsed
-  side back; the handle also collapses). Modifiers mean "both sides" here
-  too: hold one and double-click a sidebar to restore both to your default
-  widths. A sidebar can go past the middle when the other side is narrow
+  mid-drag to link/unlink. **Double-click** a sidebar to collapse it; a
+  collapsed side comes back with a double-click on its thin sliver at the
+  screen edge. Modifiers mean "both sides" here too: hold one and
+  double-click a sidebar to restore both to your default widths. A sidebar can go past the middle when the other side is narrow
   — the only limit is that at least 200px of page always stays visible
   between them.
 - **Zoom-stable**: sidebar widths are kept in pixels at 100% page zoom, so

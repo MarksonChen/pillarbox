@@ -252,12 +252,6 @@ SQZ.panels ??= (() => {
     handle.addEventListener('pointerup', finish);
     handle.addEventListener('pointercancel', finish);
 
-    handle.addEventListener('dblclick', () => {
-      if (!callbacks) return;
-      setSideWidth(side, widths[side] > 0
-        ? 0
-        : SQZ.clampDrag(lastNonZero[side], widths[other]));
-    });
   }
 
   // One-shot width change outside a drag (the dblclick gestures): adopt,
@@ -322,18 +316,22 @@ SQZ.panels ??= (() => {
       root.append(panel);
       els[side] = { panel, handle, readout };
       wireDrag(side, handle, readout);
-      // Double-click on the panel body: plain collapses THIS side — the
-      // whole sidebar is the target people actually aim for, and with one
-      // wide sidebar the 10px edge handle is the only alternative. With
-      // any modifier held it restores BOTH sides to the defaults instead,
-      // matching the drag convention (modifier = both sides). Handle
-      // dblclicks bubble up here too — those collapse/restore on their own.
+      // ONE dblclick gesture for the whole sidebar surface, handle
+      // included (it bubbles here; the readout is pointer-events:none):
+      // plain double-click collapses the side, or restores it when it is
+      // collapsed — at width 0 the edge handle IS the only remaining hit
+      // area, so "double-click the sliver at the screen edge" falls out
+      // naturally. Any modifier restores BOTH sides to the defaults,
+      // matching the drag convention (modifier = both sides).
       panel.addEventListener('dblclick', (e) => {
-        if (e.target !== panel || !callbacks) return;
+        if (!callbacks) return;
         if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
           callbacks.onReset?.();
         } else if (widths[side] > 0) {
           setSideWidth(side, 0);
+        } else {
+          const other = side === 'left' ? 'right' : 'left';
+          setSideWidth(side, SQZ.clampDrag(lastNonZero[side], widths[other]));
         }
       });
     }
