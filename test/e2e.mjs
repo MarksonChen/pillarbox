@@ -236,13 +236,17 @@ async function main() {
       return sessionId;
     };
 
-    // Match-pattern URLs can't carry a port, so filter tabs in JS instead.
-    const toggleViaWorker = (urlPrefix) => evalIn(sw, `(async () => {
+    // Run `body` in the worker with `tab` bound to the tab whose URL starts
+    // with the prefix (match-pattern URLs can't carry a port, so tabs are
+    // filtered in JS instead).
+    const viaWorker = (urlPrefix, body) => evalIn(sw, `(async () => {
       const tabs = await chrome.tabs.query({});
       const tab = tabs.find((t) => (t.url || '').startsWith(${JSON.stringify(urlPrefix)}));
-      if (!tab) throw new Error('no tab matches ${urlPrefix}');
-      return await chrome.tabs.sendMessage(tab.id, { type: 'SQZ_TOGGLE' });
+      if (!tab) throw new Error('no tab matches ' + ${JSON.stringify(urlPrefix)});
+      ${body}
     })()`);
+    const toggleViaWorker = (urlPrefix) => viaWorker(urlPrefix,
+      `return await chrome.tabs.sendMessage(tab.id, { type: 'SQZ_TOGGLE' });`);
 
     const SNAP = `(() => {
       const de = document.documentElement;
@@ -459,13 +463,8 @@ async function main() {
     // applied as 160/100 CSS px (and the fixed navbar follow). Zoom is
     // per-origin here (Chrome's default scope), so it must go back to 1
     // before the later sections open more pages on this origin.
-    const setZoomViaWorker = (urlPrefix, factor) => evalIn(sw, `(async () => {
-      const tabs = await chrome.tabs.query({});
-      const tab = tabs.find((t) => (t.url || '').startsWith(${JSON.stringify(urlPrefix)}));
-      if (!tab) throw new Error('no tab matches ${urlPrefix}');
-      await chrome.tabs.setZoom(tab.id, ${factor});
-      return true;
-    })()`);
+    const setZoomViaWorker = (urlPrefix, factor) => viaWorker(urlPrefix,
+      `await chrome.tabs.setZoom(tab.id, ${factor}); return true;`);
     const ZOOMED = async () => {
       const v = await evalIn(page, SNAP);
       return v.ml === '160px' && v.mr === '100px' && v.nav && near(v.nav.left, 160) ? v : null;

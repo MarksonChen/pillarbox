@@ -25,7 +25,7 @@ if (!SQZ.booted) {
     const ZKEY = SQZ.zoomKey(location.origin);
     let settings = SQZ.mergeSettings(null);
     let rec = null;        // {on, left, right} | null — source of truth, stored unclamped
-    const echoes = new Set(); // JSON stamps of our own storage writes
+    const echoes = SQZ.makeEchoes(); // our own storage writes, by content
 
     // Listeners are registered synchronously so a toolbar click arriving
     // while storage is still loading finds a receiver (the message handler
@@ -64,19 +64,30 @@ if (!SQZ.booted) {
 
     const ready = init();
 
-    async function init() {
-      cleanupStaleArtifacts();
-      let syncRaw, localRaw;
+    // One orphan-guarded storage read: the given local keys, plus the sync
+    // settings when asked. Returns null when the read died because the
+    // extension reloaded out from under us (teardown has already run).
+    async function readState(localKeys, withSettings) {
       try {
-        [syncRaw, localRaw] = await Promise.all([
-          chrome.storage.sync.get(SQZ.SETTINGS_KEY),
-          chrome.storage.local.get([KEY, ZKEY]),
+        const [syncRaw, localRaw] = await Promise.all([
+          withSettings ? chrome.storage.sync.get(SQZ.SETTINGS_KEY) : null,
+          chrome.storage.local.get(localKeys),
         ]);
+        return { syncRaw, localRaw };
       } catch (e) {
-        if (orphaned()) return teardown(); // reload raced the boot
+        if (orphaned()) {
+          teardown();
+          return null;
+        }
         throw e;
       }
-      if (torndown) return; // orphaned while the read was in flight
+    }
+
+    async function init() {
+      cleanupStaleArtifacts();
+      const state = await readState([KEY, ZKEY], true);
+      if (!state || torndown) return; // orphaned during the read
+      const { syncRaw, localRaw } = state;
       // The zoom hint rides the storage read we make anyway (no service-
       // worker wake), so a zoomed page boots at its exact widths with no
       // extra latency. Chrome remembers zoom per origin, so a hint written
@@ -116,8 +127,9 @@ if (!SQZ.booted) {
       // squeezed box no longer escapes. Adopted elements carry an inline
       // --pillarbox marker; strip everything the manager could have written.
       // (Lives before the marker existed left the inset fingerprint
-      // left + right + width:auto, all !important.)
-      for (const el of document.getElementsByTagName('*')) {
+      // left + right + width:auto, all !important.) Only elements with a
+      // style attribute can carry either — skip the rest of the DOM.
+      for (const el of document.querySelectorAll('[style]')) {
         const s = el.style;
         if (s.getPropertyValue('--pillarbox')) {
           for (const prop of ['--pillarbox', 'left', 'right', 'width', 'min-width',
@@ -131,6 +143,13 @@ if (!SQZ.booted) {
           for (const prop of ['left', 'right', 'width']) s.removeProperty(prop);
         }
       }
+    }
+
+    // The page can absorb width changes only while it is visibly squeezed
+    // and nothing else owns the widths right now — not a drag in progress,
+    // not the print suspension.
+    function idle() {
+      return phase === 'active' && !suspended && !dragging;
     }
 
     // rec holds "px at 100% zoom"; the page works in CSS px, whose size on
@@ -176,9 +195,7 @@ if (!SQZ.booted) {
     // Only ≠100% is worth remembering; at 1 the key is removed.
     function adoptConfirmed(v) {
       zoomConfirmed = true;
-      if (adoptZoom(v) && phase === 'active' && !suspended && !dragging) {
-        applyWidthsToPage();
-      }
+      if (adoptZoom(v) && idle()) applyWidthsToPage();
       const hintValue = Math.abs(zoom - 1) < 1e-6 ? null : zoom;
       if (hintValue !== zoomHintWritten) {
         zoomHintWritten = hintValue;
@@ -370,13 +387,11 @@ if (!SQZ.booted) {
         ...patch,
         t: Date.now(), // LRU timestamp; the service worker prunes the oldest
       };
-      const stamp = JSON.stringify(rec);
-      echoes.add(stamp);
-      if (echoes.size > 16) echoes.delete(echoes.values().next().value);
+      const stamp = echoes.add(rec);
       try {
         await chrome.storage.local.set({ [KEY]: rec });
       } catch {
-        echoes.delete(stamp);
+        echoes.drop(stamp);
         if (orphaned()) teardown();
       }
     }
@@ -392,7 +407,7 @@ if (!SQZ.booted) {
       }
       if (area === 'local' && KEY in changes) {
         const next = changes[KEY].newValue ?? null;
-        if (next && echoes.delete(JSON.stringify(next))) return; // our own write
+        if (next && echoes.own(next)) return; // our own write bouncing back
         recEpoch++;
         rec = next;
         applyRecord();
@@ -408,7 +423,7 @@ if (!SQZ.booted) {
         else phase = 'dormant';
       } else if (phase === 'dormant') {
         enable();
-      } else if (phase === 'active' && !dragging && !suspended) {
+      } else if (idle()) {
         applyWidthsToPage();
       }
     }
@@ -454,7 +469,7 @@ if (!SQZ.booted) {
       if (resizeRaf) return;
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = 0;
-        if (phase !== 'active' || suspended || dragging) return;
+        if (!idle()) return;
         // A zoom change resizes the layout viewport with devicePixelRatio
         // already moved, and this rAF still runs inside the rendering
         // update that paints the first zoomed frame (resize steps precede
@@ -480,19 +495,10 @@ if (!SQZ.booted) {
     async function refreshRecord(withSettings) {
       const key = KEY;
       const epoch = recEpoch;
-      let syncRaw, localRaw;
-      try {
-        [syncRaw, localRaw] = await Promise.all([
-          withSettings ? chrome.storage.sync.get(SQZ.SETTINGS_KEY) : null,
-          chrome.storage.local.get(key),
-        ]);
-      } catch (e) {
-        if (orphaned()) return teardown(); // reload raced the event's guard
-        throw e;
-      }
-      if (KEY !== key || recEpoch !== epoch) return;
-      if (withSettings) settings = SQZ.mergeSettings(syncRaw[SQZ.SETTINGS_KEY]);
-      rec = localRaw[key] ?? null;
+      const state = await readState(key, withSettings);
+      if (!state || KEY !== key || recEpoch !== epoch) return;
+      if (withSettings) settings = SQZ.mergeSettings(state.syncRaw[SQZ.SETTINGS_KEY]);
+      rec = state.localRaw[key] ?? null;
       applyRecord();
       if (withSettings) applySettings();
     }

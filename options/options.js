@@ -123,10 +123,8 @@ async function loadSettings() {
 }
 
 // Our own saves must not re-render the form (that would stomp an edit in
-// progress). Matched by content, not by count: a save that changes nothing
-// fires NO onChanged event at all, so a pending-write counter would leak
-// and swallow the next genuine remote change. Same idiom as content/index.js.
-const echoes = new Set(); // JSON stamps of our own writes
+// progress); see SQZ.makeEchoes for why matching is by content, not count.
+const echoes = SQZ.makeEchoes();
 
 async function saveSettings() {
   const settings = formState();
@@ -140,14 +138,12 @@ async function saveSettings() {
   }
   applyPageTheme(settings.theme);
   updatePreview();
-  const stamp = JSON.stringify(settings);
-  echoes.add(stamp);
-  if (echoes.size > 16) echoes.delete(echoes.values().next().value);
+  const stamp = echoes.add(settings);
   try {
     await chrome.storage.sync.set({ [SQZ.SETTINGS_KEY]: settings });
   } catch {
     // Write throttled/failed — resync the form to what storage really holds.
-    echoes.delete(stamp);
+    echoes.drop(stamp);
     loadSettings();
   }
 }
@@ -222,8 +218,7 @@ function renderModKeys() {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync' || !(SQZ.SETTINGS_KEY in changes)) return;
-  const stamp = JSON.stringify(changes[SQZ.SETTINGS_KEY].newValue);
-  if (echoes.delete(stamp)) return; // our own save; the form is already current
+  if (echoes.own(changes[SQZ.SETTINGS_KEY].newValue)) return; // our own save
   loadSettings();
 });
 

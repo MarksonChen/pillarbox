@@ -118,6 +118,16 @@ SQZ.panels ??= (() => {
     document.documentElement.style.removeProperty('-webkit-user-select');
   }
 
+  // Adopt a width pair and remember each side's last non-zero width — the
+  // dblclick collapse/restore target. Every width change funnels through
+  // here so the two can never drift apart.
+  function noteWidths(next) {
+    widths = next;
+    for (const side of ['left', 'right']) {
+      if (widths[side] > 0) lastNonZero[side] = widths[side];
+    }
+  }
+
   function applyWidths() {
     if (!els) return;
     for (const side of ['left', 'right']) {
@@ -147,10 +157,7 @@ SQZ.panels ??= (() => {
   }
 
   function setWidths(left, right) {
-    widths = { left, right };
-    for (const side of ['left', 'right']) {
-      if (widths[side] > 0) lastNonZero[side] = widths[side];
-    }
+    noteWidths({ left, right });
     applyWidths();
   }
 
@@ -219,9 +226,7 @@ SQZ.panels ??= (() => {
       } else {
         widths[side] = SQZ.clampDrag(pointerPx, widths[other]);
       }
-      for (const s of ['left', 'right']) {
-        if (widths[s] > 0) lastNonZero[s] = widths[s];
-      }
+      noteWidths(widths);
       applyWidths();
       // Report the full displayed pair: the page must be squeezed to exactly
       // what the panels show, not to a re-clamp of stale stored values.
@@ -253,7 +258,7 @@ SQZ.panels ??= (() => {
         ? 0
         : SQZ.clampDrag(lastNonZero[side], widths[other]);
       widths[side] = target;
-      if (target > 0) lastNonZero[side] = target;
+      noteWidths(widths);
       applyWidths();
       callbacks.onDrag?.(side, { ...widths });
       callbacks.onDragEnd?.(side);
@@ -272,10 +277,7 @@ SQZ.panels ??= (() => {
       setAppearance(opts.appearance);
       return;
     }
-    widths = { left: opts.left, right: opts.right };
-    for (const side of ['left', 'right']) {
-      if (widths[side] > 0) lastNonZero[side] = widths[side];
-    }
+    noteWidths({ left: opts.left, right: opts.right });
 
     host = document.createElement(HOST_TAG);
     const hs = host.style;

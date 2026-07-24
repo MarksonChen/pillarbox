@@ -60,6 +60,33 @@ SQZ.zoomKey = (origin) => SQZ.ZOOM_PREFIX + origin;
 
 SQZ.mergeSettings = (raw) => ({ ...SQZ.DEFAULT_SETTINGS, ...(raw ?? {}) });
 
+// Echo filter for storage.onChanged: a context records the JSON stamp of
+// each write it makes and skips the change event that bounces back.
+// Matched by content, not by count — a write that changes nothing fires NO
+// event at all, so a pending-write counter would leak and swallow the next
+// genuine remote change. Used by the content script (page records) and the
+// options page (settings).
+SQZ.makeEchoes = () => {
+  const stamps = new Set();
+  return {
+    // Record an outgoing write; returns the stamp so a failed write can be
+    // dropped again.
+    add(value) {
+      const stamp = JSON.stringify(value);
+      stamps.add(stamp);
+      if (stamps.size > 16) stamps.delete(stamps.values().next().value);
+      return stamp;
+    },
+    drop(stamp) {
+      stamps.delete(stamp);
+    },
+    // True — and consumed — when the incoming value is one of our own.
+    own(value) {
+      return stamps.delete(JSON.stringify(value));
+    },
+  };
+};
+
 // Clamp a width setting to a sane stored value (options inputs, URL rules).
 SQZ.clampDefault = (value) =>
   Math.max(0, Math.min(SQZ.MAX_WIDTH, Math.round(Number(value)) || 0));
