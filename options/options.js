@@ -19,19 +19,74 @@ scheme.addEventListener('change', () => {
   updatePreview();
 });
 
-function clampDefault(value) {
-  return Math.max(0, Math.min(SQZ.MAX_WIDTH, Math.round(Number(value)) || 0));
-}
-
 function formState() {
   return {
     theme: document.querySelector('input[name="theme"]:checked')?.value ?? 'auto',
-    defaultLeft: clampDefault($('#defaultLeft').value),
-    defaultRight: clampDefault($('#defaultRight').value),
+    defaultLeft: SQZ.clampDefault($('#defaultLeft').value),
+    defaultRight: SQZ.clampDefault($('#defaultRight').value),
     showReadout: $('#showReadout').checked,
     colorLight: $('#colorLight').value,
     colorDark: $('#colorDark').value,
+    rules: rulesFromForm(),
   };
+}
+
+// ---- per-URL default-width rules ----
+// Each row is one {pattern, left, right}. Rows live in the form, so edits
+// ride the same save-on-change path as every other field. A row with an
+// empty pattern stays in the UI but is not saved; an invalid regex is saved
+// (nothing typed is ever thrown away) but flagged here and skipped by the
+// content script at match time.
+function markValidity(row) {
+  const input = row.querySelector('.rule-pattern');
+  let ok = true;
+  if (input.value) {
+    try { new RegExp(input.value); } catch { ok = false; }
+  }
+  input.classList.toggle('invalid', !ok);
+}
+
+function ruleRow(rule) {
+  const row = document.createElement('div');
+  row.className = 'rule';
+  row.innerHTML = `
+    <input type="text" class="rule-pattern" spellcheck="false" autocomplete="off"
+           placeholder="https://www\\.example\\.com/articles" aria-label="URL regex">
+    <input type="number" class="rule-left" min="0" max="${SQZ.MAX_WIDTH}" step="5"
+           aria-label="Left width">
+    <span class="unit">×</span>
+    <input type="number" class="rule-right" min="0" max="${SQZ.MAX_WIDTH}" step="5"
+           aria-label="Right width">
+    <span class="unit">px</span>
+    <button type="button" class="ghost rule-remove" title="Remove rule">✕</button>`;
+  row.querySelector('.rule-pattern').value = rule.pattern ?? '';
+  row.querySelector('.rule-left').value = SQZ.clampDefault(rule.left);
+  row.querySelector('.rule-right').value = SQZ.clampDefault(rule.right);
+  row.querySelector('.rule-remove').addEventListener('click', () => {
+    row.remove();
+    saveSettings();
+  });
+  markValidity(row);
+  return row;
+}
+
+function renderRules(rules) {
+  const box = $('#rules');
+  box.textContent = '';
+  for (const rule of Array.isArray(rules) ? rules : []) box.append(ruleRow(rule));
+}
+
+function rulesFromForm() {
+  return [...document.querySelectorAll('#rules .rule')].flatMap((row) => {
+    markValidity(row);
+    const pattern = row.querySelector('.rule-pattern').value.trim();
+    if (!pattern) return [];
+    return [{
+      pattern,
+      left: SQZ.clampDefault(row.querySelector('.rule-left').value),
+      right: SQZ.clampDefault(row.querySelector('.rule-right').value),
+    }];
+  });
 }
 
 // Mini mock of a squeezed page: panel colors follow the selected theme,
@@ -62,6 +117,7 @@ async function loadSettings() {
   $('#showReadout').checked = s.showReadout === true;
   $('#colorLight').value = SQZ.sanitizeColor(s.colorLight, SQZ.DEFAULT_SETTINGS.colorLight);
   $('#colorDark').value = SQZ.sanitizeColor(s.colorDark, SQZ.DEFAULT_SETTINGS.colorDark);
+  renderRules(s.rules);
   applyPageTheme(s.theme);
   updatePreview();
 }
@@ -76,6 +132,12 @@ async function saveSettings() {
   const settings = formState();
   $('#defaultLeft').value = settings.defaultLeft; // reflect clamping
   $('#defaultRight').value = settings.defaultRight;
+  for (const row of document.querySelectorAll('#rules .rule')) {
+    for (const cls of ['.rule-left', '.rule-right']) {
+      const input = row.querySelector(cls);
+      input.value = SQZ.clampDefault(input.value);
+    }
+  }
   applyPageTheme(settings.theme);
   updatePreview();
   const stamp = JSON.stringify(settings);
@@ -93,6 +155,18 @@ async function saveSettings() {
 const form = $('#settingsForm');
 form.addEventListener('change', saveSettings);
 form.addEventListener('input', updatePreview); // live while picking colors
+
+// New rules start from the current global defaults; nothing is saved until
+// the pattern is committed (blank patterns never reach storage).
+$('#addRule').addEventListener('click', () => {
+  const row = ruleRow({
+    pattern: '',
+    left: SQZ.clampDefault($('#defaultLeft').value),
+    right: SQZ.clampDefault($('#defaultRight').value),
+  });
+  $('#rules').append(row);
+  row.querySelector('.rule-pattern').focus();
+});
 
 $('#resetColors').addEventListener('click', () => {
   $('#colorLight').value = SQZ.DEFAULT_SETTINGS.colorLight;

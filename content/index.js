@@ -241,11 +241,20 @@ if (!SQZ.booted) {
       SQZ.fixedBars.start(left, right, (el) => el.localName === SQZ.panels.HOST_TAG);
     }
 
+    // Default widths for THIS page: the first matching per-URL rule wins,
+    // otherwise the global defaults. Consulted when a page has no saved
+    // widths yet, and by the double-click reset.
+    function defaultWidths() {
+      return SQZ.matchRule(settings.rules, location.href)
+        ?? { left: settings.defaultLeft, right: settings.defaultRight };
+    }
+
     function enable() {
+      const dw = defaultWidths();
       rec = {
         on: true,
-        left: rec?.left ?? settings.defaultLeft,
-        right: rec?.right ?? settings.defaultRight,
+        left: rec?.left ?? dw.left,
+        right: rec?.right ?? dw.right,
       };
       const { left, right } = effWidths();
       SQZ.squeeze.apply(left, right);
@@ -357,7 +366,7 @@ if (!SQZ.booted) {
     async function persist(patch) {
       recEpoch++;
       rec = {
-        ...(rec ?? { on: false, left: settings.defaultLeft, right: settings.defaultRight }),
+        ...(rec ?? { on: false, ...defaultWidths() }),
         ...patch,
         t: Date.now(), // LRU timestamp; the service worker prunes the oldest
       };
@@ -434,9 +443,10 @@ if (!SQZ.booted) {
     }
 
     function onReset() {
-      // Double-click on a panel's empty space: both sides back to the
-      // defaults. persist() updates rec synchronously before writing.
-      persist({ on: true, left: settings.defaultLeft, right: settings.defaultRight });
+      // Double-click on a panel's empty space: both sides back to this
+      // page's defaults (URL rule or global). persist() updates rec
+      // synchronously before writing.
+      persist({ on: true, ...defaultWidths() });
       applyWidthsToPage();
     }
 

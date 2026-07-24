@@ -13,6 +13,7 @@ SQZ.DEFAULT_SETTINGS = Object.freeze({
   colorLight: '#eef0f3',    // panel color when the light theme is active
   colorDark: '#1d2126',     // panel color when the dark theme is active
   showReadout: false,       // px readout bubble while dragging a handle
+  rules: Object.freeze([]), // [{pattern, left, right}] per-URL default widths
 });
 
 // Silent cap on remembered pages: the least recently used records beyond
@@ -58,6 +59,31 @@ SQZ.pageKey = (url) => {
 SQZ.zoomKey = (origin) => SQZ.ZOOM_PREFIX + origin;
 
 SQZ.mergeSettings = (raw) => ({ ...SQZ.DEFAULT_SETTINGS, ...(raw ?? {}) });
+
+// Clamp a width setting to a sane stored value (options inputs, URL rules).
+SQZ.clampDefault = (value) =>
+  Math.max(0, Math.min(SQZ.MAX_WIDTH, Math.round(Number(value)) || 0));
+
+// First matching per-URL rule, or null. Patterns are regexes tested against
+// origin + path + query — the #hash is ignored, mirroring pageKey — and an
+// unanchored plain prefix like "https://www.example.com/articles" works as
+// expected. Invalid or empty patterns are skipped. Rule widths are px at
+// 100% zoom, like every stored width.
+SQZ.matchRule = (rules, url) => {
+  if (!Array.isArray(rules)) return null;
+  const u = new URL(url);
+  const target = u.origin + u.pathname + u.search;
+  for (const rule of rules) {
+    if (typeof rule?.pattern !== 'string' || rule.pattern === '') continue;
+    try {
+      if (!new RegExp(rule.pattern).test(target)) continue;
+    } catch {
+      continue; // invalid regex: the options page flags it, we skip it
+    }
+    return { left: SQZ.clampDefault(rule.left), right: SQZ.clampDefault(rule.right) };
+  }
+  return null;
+};
 
 // The sidebars may never leave less than this much page visible between
 // them. There is no per-side cap: one sidebar can sit at the page border

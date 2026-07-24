@@ -69,6 +69,18 @@
         <input type="checkbox" id="showReadout" class="switch">
       </div>
     </section>
+
+    <section class="card">
+      <h2>Per-URL default widths</h2>
+      <p class="hint">Pages whose URL (without <code>#hash</code>) matches a
+      regex get these default widths instead — on their first enable, and on
+      a double-click reset. The first matching rule wins. Saved widths still
+      take precedence on pages you have already resized.</p>
+      <div id="rules"></div>
+      <div class="field trailing">
+        <button id="addRule" type="button" class="ghost">Add rule</button>
+      </div>
+    </section>
   </form>
 
   <section class="card">

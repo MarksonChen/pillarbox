@@ -18,6 +18,13 @@ put their content hard-left, hard-right, or across the full window width.
 - **Zoom-stable**: sidebar widths are kept in pixels at 100% page zoom, so
   a sidebar stays the same size on screen at any zoom level — zooming
   changes the size of the page's text, not the width of the pillars.
+- **Per-URL default widths**: optional rules map a URL regex to its own
+  default pair (e.g. `https://www\.zhihu\.com/question` → 425 × 425,
+  `https://www\.nature\.com/articles` → 530 × 0). The first matching rule
+  decides what a page gets on its first enable and what the double-click
+  reset returns to; pages you have already resized keep their saved widths.
+  Patterns are tested against the URL without its `#hash`; invalid regexes
+  are flagged in the options page and skipped.
 - **Per-page memory with auto-restore**: each exact URL (path + query; the
   hash is ignored) remembers whether the sidebars are on and how wide they
   are, and re-applies that on every reload and future visit until you toggle
@@ -32,10 +39,10 @@ put their content hard-left, hard-right, or across the full window width.
   `width:100vw` (chatgpt.com, notion.so) and full-bleed bars that break out
   with viewport-relative negative margins (reddit's header).
 - **Options page**: live preview, theme (Auto/Light/Dark), sidebar colors
-  for the light and dark themes, default widths, the pixel readout while
-  resizing (off by default), a gesture reference, and the current keyboard
-  shortcut with a jump to Chrome's shortcut editor (Chrome offers no API to
-  set shortcuts from an extension page).
+  for the light and dark themes, default widths, per-URL width rules, the
+  pixel readout while resizing (off by default), a gesture reference, and
+  the current keyboard shortcut with a jump to Chrome's shortcut editor
+  (Chrome offers no API to set shortcuts from an extension page).
 
 ## Install (any Chrome)
 
@@ -144,7 +151,8 @@ test/                  test pages + end-to-end script
 ```
 
 State: `chrome.storage.sync['settings']` holds `{theme, defaultLeft,
-defaultRight, colorLight, colorDark, showReadout}`;
+defaultRight, colorLight, colorDark, showReadout, rules}` (`rules` is an
+ordered list of `{pattern, left, right}` — first matching regex wins);
 `chrome.storage.local['page:<origin+path+query>']` holds `{on, left, right, t}`
 per page (widths in px at 100% zoom; `t` is the last-used timestamp driving
 the 1000-page LRU cap); `chrome.storage.local['zoom:<origin>']` caches an
@@ -173,6 +181,7 @@ node test/e2e.mjs
 The script launches a throwaway headless profile, toggles via the real
 message path, and asserts reflow, fixed-bar insetting, per-page auto-restore
 after reload, zoom-stable widths (correct in the first zoomed frame, hint
-persistence, zoomed page load), live settings flips, theming, and survival
-of a `style-src 'none'` CSP. It writes screenshots to `$SHOT_DIR` (default: OS
+persistence, zoomed page load), per-URL width rules (first-enable widths,
+rule-aware reset, options editor round-trip), live settings flips, theming,
+and survival of a `style-src 'none'` CSP. It writes screenshots to `$SHOT_DIR` (default: OS
 temp dir).

@@ -88,7 +88,15 @@ class CDP {
   send(method, params = {}, sessionId) {
     const id = ++this.nextId;
     this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
-    return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+    // Commands whose target dies mid-flight can be dropped without a reply;
+    // a bare await would hang the suite forever. 30s covers every legitimate
+    // command (screenshots included) with a wide margin.
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      setTimeout(() => {
+        if (this.pending.delete(id)) reject(new Error(`CDP ${method} timed out`));
+      }, 30000).unref?.();
+    });
   }
 }
 
@@ -118,6 +126,14 @@ function check(name, ok, detail = '') {
 const near = (a, b, tol = 4) => Math.abs(a - b) <= tol;
 
 async function main() {
+  // Belt-and-braces: if anything above still manages to hang, fail loudly
+  // with the transcript so far instead of blocking a CI runner forever.
+  const watchdog = setTimeout(() => {
+    console.error('\nE2E watchdog: suite exceeded 5 minutes; aborting.');
+    process.exit(3);
+  }, 300000);
+  watchdog.unref?.();
+
   const chromeBin = findChrome();
 
   // Static server for the test pages.
@@ -143,6 +159,20 @@ async function main() {
     // Chrome ships component extensions whose workers are also named
     // background.js; keep them out of the target list.
     '--disable-component-extensions-with-background-pages',
+    // Keep the renderer producing frames even when the process is deemed
+    // occluded or backgrounded — CSS transitions, rAF, resize dispatch and
+    // screenshots all ride the BeginFrame tick and stall without these
+    // (the same trio Puppeteer passes by default). Frames still starve if
+    // the HOST goes to sleep mid-run; on macOS, run the suite under
+    // `caffeinate -dims` when testing on a laptop that may nap.
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    // Decouple BeginFrames from display vsync: on macOS the compositor's
+    // clock (CVDisplayLink) stops with a sleeping display, freezing rAF,
+    // transitions, resize dispatch and screenshots even in headless.
+    '--disable-gpu-vsync',
+    '--disable-frame-rate-limit',
     '--no-first-run',
     '--no-default-browser-check',
     '--window-size=1440,900',
@@ -163,8 +193,15 @@ async function main() {
     }, 20000, 'devtools endpoint');
     const cdp = await CDP.connect(version.webSocketDebuggerUrl);
 
+    // Runtime.evaluate can be dropped without a reply if its execution
+    // context dies mid-flight (a reload racing the call) — a bare await
+    // would hang the suite forever. Time the call out instead; the until()
+    // wrapper around every poll retries against the fresh context.
     const evalIn = async (sessionId, expression, awaitPromise = true) => {
-      const r = await cdp.send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true }, sessionId);
+      const r = await Promise.race([
+        cdp.send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true }, sessionId),
+        sleep(10000).then(() => { throw new Error('evaluate timed out (context destroyed?)'); }),
+      ]);
       if (r.exceptionDetails) {
         throw new Error('evaluate threw: '
           + (r.exceptionDetails.exception?.description ?? JSON.stringify(r.exceptionDetails)));
@@ -284,11 +321,18 @@ async function main() {
     await settingsSet({ theme: 'light', defaultLeft: 200, defaultRight: 200 });
     await until(async () => (await panelBg()) === 'rgb(238, 240, 243)', 3000, 'panel color reset');
 
-    // Screenshot for the humans.
-    const shot = await cdp.send('Page.captureScreenshot', { format: 'png' }, page);
-    const shotPath = path.join(SHOT_DIR, 'squeeze-on.png');
-    writeFileSync(shotPath, Buffer.from(shot.data, 'base64'));
-    console.log('screenshot: ' + shotPath);
+    // Screenshots are for the humans — never let one sink the suite.
+    const screenshot = async (sessionId, name, params = {}) => {
+      try {
+        const shot = await cdp.send('Page.captureScreenshot', { format: 'png', ...params }, sessionId);
+        const file = path.join(SHOT_DIR, name);
+        writeFileSync(file, Buffer.from(shot.data, 'base64'));
+        console.log('screenshot: ' + file);
+      } catch (e) {
+        console.log(`screenshot ${name} skipped: ${e.message}`);
+      }
+    };
+    await screenshot(page, 'squeeze-on.png');
 
     // Auto-restore after reload. Stamp the old document first so the poll
     // can't be satisfied by the pre-reload page.
@@ -308,11 +352,11 @@ async function main() {
 
     // Drag the left handle from 200 to 320 with synthesized mouse input
     // (the handle straddles the panel edge, so x=200 hits it).
-    const mouse = (type, x, y, clickCount = 0, modifiers = 0) => cdp.send('Input.dispatchMouseEvent', {
+    const mouse = (type, x, y, clickCount = 0, modifiers = 0, session = page) => cdp.send('Input.dispatchMouseEvent', {
       type, x, y, button: 'left',
       buttons: type === 'mouseReleased' ? 0 : 1,
       clickCount, pointerType: 'mouse', modifiers,
-    }, page);
+    }, session);
     const SHIFT = 8; // CDP modifier bitmask: Alt=1 Ctrl=2 Meta=4 Shift=8
     await mouse('mousePressed', 200, 450, 1);
     for (const x of [206, 230, 270, 300, 320]) await mouse('mouseMoved', x, 450);
@@ -534,10 +578,51 @@ async function main() {
     check('CSP page: shadow panel fully styled despite style-src none',
       ['rgb(238, 240, 243)', 'rgb(29, 33, 38)'].includes(cspState.bg), `bg=${cspState.bg}`);
 
-    const shot2 = await cdp.send('Page.captureScreenshot', { format: 'png' }, csp);
-    const shotPath2 = path.join(SHOT_DIR, 'squeeze-csp.png');
-    writeFileSync(shotPath2, Buffer.from(shot2.data, 'base64'));
-    console.log('screenshot: ' + shotPath2);
+    await screenshot(csp, 'squeeze-csp.png');
+
+    // ---------- per-URL default-width rules ----------
+    // First valid match wins; invalid regexes are skipped; the widths apply
+    // on a page's FIRST enable (no saved record) and on double-click reset.
+    await settingsSet({
+      theme: 'light', defaultLeft: 200, defaultRight: 200,
+      rules: [
+        { pattern: '([', left: 999, right: 999 },      // invalid: skipped
+        { pattern: 'ruled=1', left: 425, right: 425 }, // first valid match
+        { pattern: 'ruled', left: 111, right: 111 },   // also matches; loses
+      ],
+    });
+    const ruled = await openPage(`${BASE}/page.html?ruled=1`);
+    await sleep(300);
+    const ruledOn = await toggleViaWorker(`${BASE}/page.html?ruled=1`);
+    check('ruled page toggles on', ruledOn && ruledOn.on === true, JSON.stringify(ruledOn));
+    let rs = await until(async () => {
+      const v = await evalIn(ruled, SNAP);
+      return v.ml === '425px' && v.mr === '425px' ? v : null;
+    }, 4000, 'rule widths applied on first enable');
+    check('URL rule sets first-enable widths (invalid skipped, first match wins)',
+      true, `ml=${rs.ml} mr=${rs.mr}`);
+
+    // Drag away from the rule widths, then double-click a panel's empty
+    // space: the reset must return to the RULE defaults, not the global 200s.
+    await until(() => evalIn(ruled,
+      `getComputedStyle(document.querySelector('pillarbox-host').shadowRoot`
+      + `.querySelector('.panel.left')).transform === 'none'`), 3000, 'ruled panel settled');
+    await mouse('mousePressed', 425, 450, 1, 0, ruled);
+    for (const x of [420, 380, 340, 300]) await mouse('mouseMoved', x, 450, 0, 0, ruled);
+    await mouse('mouseReleased', 300, 450, 1, 0, ruled);
+    await until(async () => (await evalIn(ruled, SNAP)).ml === '300px', 3000, 'ruled page dragged to 300');
+    await mouse('mousePressed', 100, 450, 1, 0, ruled);
+    await mouse('mouseReleased', 100, 450, 1, 0, ruled);
+    await mouse('mousePressed', 100, 450, 2, 0, ruled);
+    await mouse('mouseReleased', 100, 450, 2, 0, ruled);
+    rs = await until(async () => {
+      const v = await evalIn(ruled, SNAP);
+      return v.ml === '425px' && v.mr === '425px' ? v : null;
+    }, 3000, 'dblclick reset returns to rule widths');
+    check('double-click reset restores the rule defaults on a matching page', true,
+      `ml=${rs.ml} mr=${rs.mr}`);
+    // Clear the rules so later sections see the plain global defaults.
+    await settingsSet({ theme: 'light', defaultLeft: 200, defaultRight: 200 });
 
     // ---------- options page ----------
     const opts = await openPage(`chrome-extension://${extId}/options/options.html`);
@@ -581,11 +666,48 @@ async function main() {
     check('options: gesture reference rendered with modifier keycaps',
       gestures.rows === 5 && gestures.modKeys >= 3, JSON.stringify(gestures));
 
-    const shot3 = await cdp.send('Page.captureScreenshot',
-      { format: 'png', captureBeyondViewport: true }, opts);
-    const shotPath3 = path.join(SHOT_DIR, 'options.png');
-    writeFileSync(shotPath3, Buffer.from(shot3.data, 'base64'));
-    console.log('screenshot: ' + shotPath3);
+    // Rules editor: remote rules render as rows; adding and removing rows
+    // saves through the same save-on-change path as every other field.
+    await settingsSet({
+      theme: 'dark', defaultLeft: 200, defaultRight: 200,
+      rules: [{ pattern: 'example\\.com/articles', left: 530, right: 0 }],
+    });
+    await until(async () => (await evalIn(opts,
+      `document.querySelectorAll('#rules .rule').length`)) === 1, 3000, 'rule row rendered');
+    const row = await evalIn(opts, `({
+      pattern: document.querySelector('.rule-pattern').value,
+      left: document.querySelector('.rule-left').value,
+      right: document.querySelector('.rule-right').value,
+      invalid: document.querySelector('.rule-pattern').classList.contains('invalid'),
+    })`);
+    check('options: rule row renders from settings',
+      row.pattern === 'example\\.com/articles' && row.left === '530'
+        && row.right === '0' && row.invalid === false, JSON.stringify(row));
+    await evalIn(opts, `(() => {
+      document.getElementById('addRule').click();
+      const rows = document.querySelectorAll('#rules .rule');
+      const r = rows[rows.length - 1];
+      r.querySelector('.rule-pattern').value = 'zhihu\\\\.com/question';
+      r.querySelector('.rule-left').value = '425';
+      r.querySelector('.rule-right').value = '425';
+      r.querySelector('.rule-right').dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`);
+    await until(async () => {
+      const st = await evalIn(sw, `chrome.storage.sync.get('settings')`);
+      return st.settings?.rules?.length === 2
+        && st.settings.rules[1].pattern === 'zhihu\\.com/question'
+        && st.settings.rules[1].left === 425;
+    }, 3000, 'added rule saved');
+    check('options: adding a rule saves it', true);
+    await evalIn(opts, `(document.querySelectorAll('.rule-remove')[1].click(), true)`);
+    await until(async () => {
+      const st = await evalIn(sw, `chrome.storage.sync.get('settings')`);
+      return st.settings?.rules?.length === 1;
+    }, 3000, 'removed rule saved');
+    check('options: removing a rule saves', true);
+
+    await screenshot(opts, 'options.png', { captureBeyondViewport: true });
 
     // Echo regression: a save that changes nothing fires NO onChanged event,
     // so matching own writes by count leaks and swallows the next remote
