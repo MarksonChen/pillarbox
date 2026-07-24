@@ -438,15 +438,31 @@ async function main() {
     }, 3000, 'mirrored drag from the right handle');
     check('modifier-drag mirrors from the right handle too', true, `ml=${s.ml} mr=${s.mr}`);
 
-    // Double-click on a panel's empty space (x=100, well away from the
-    // handle at ~280) resets both sides to the defaults (200/200).
+    // Plain double-click on a panel's BODY (x=100, well away from the
+    // handle at ~280) collapses that side — the whole sidebar is a valid
+    // target, which is what makes a lone sidebar collapsible at all.
     await mouse('mousePressed', 100, 450, 1); await mouse('mouseReleased', 100, 450, 1);
     await mouse('mousePressed', 100, 450, 2); await mouse('mouseReleased', 100, 450, 2);
     s = await until(async () => {
       const v = await evalIn(page, SNAP);
+      return v.ml === '0px' && v.mr === '200px' ? v : null;
+    }, 3000, 'body dblclick collapses the side');
+    check('dblclick on a sidebar\'s body collapses that side', true,
+      `ml=${s.ml} mr=${s.mr}`);
+    await mouse('mousePressed', 2, 450, 1); await mouse('mouseReleased', 2, 450, 1);
+    await mouse('mousePressed', 2, 450, 2); await mouse('mouseReleased', 2, 450, 2);
+    await until(async () => (await evalIn(page, SNAP)).ml === '280px', 3000,
+      'edge handle restores the collapsed side');
+
+    // Any modifier + double-click on a panel body resets BOTH sides to the
+    // defaults (modifier = "both sides", same convention as mirrored drag).
+    await mouse('mousePressed', 100, 450, 1, SHIFT); await mouse('mouseReleased', 100, 450, 1, SHIFT);
+    await mouse('mousePressed', 100, 450, 2, SHIFT); await mouse('mouseReleased', 100, 450, 2, SHIFT);
+    s = await until(async () => {
+      const v = await evalIn(page, SNAP);
       return v.ml === '200px' && v.mr === '200px' ? v : null;
-    }, 3000, 'dblclick empty space resets to defaults');
-    check('dblclick on a panel\'s empty space restores default widths', true,
+    }, 3000, 'modifier dblclick resets to defaults');
+    check('modifier + dblclick on a sidebar restores default widths', true,
       `ml=${s.ml} mr=${s.mr}`);
     // Put the left side back at 320 for the persistence checks below.
     await mouse('mousePressed', 200, 450, 1);
@@ -601,8 +617,8 @@ async function main() {
     check('URL rule sets first-enable widths (invalid skipped, first match wins)',
       true, `ml=${rs.ml} mr=${rs.mr}`);
 
-    // Drag away from the rule widths, then double-click a panel's empty
-    // space: the reset must return to the RULE defaults, not the global 200s.
+    // Drag away from the rule widths, then modifier + double-click a panel
+    // body: the reset must return to the RULE defaults, not the global 200s.
     await until(() => evalIn(ruled,
       `getComputedStyle(document.querySelector('pillarbox-host').shadowRoot`
       + `.querySelector('.panel.left')).transform === 'none'`), 3000, 'ruled panel settled');
@@ -610,15 +626,15 @@ async function main() {
     for (const x of [420, 380, 340, 300]) await mouse('mouseMoved', x, 450, 0, 0, ruled);
     await mouse('mouseReleased', 300, 450, 1, 0, ruled);
     await until(async () => (await evalIn(ruled, SNAP)).ml === '300px', 3000, 'ruled page dragged to 300');
-    await mouse('mousePressed', 100, 450, 1, 0, ruled);
-    await mouse('mouseReleased', 100, 450, 1, 0, ruled);
-    await mouse('mousePressed', 100, 450, 2, 0, ruled);
-    await mouse('mouseReleased', 100, 450, 2, 0, ruled);
+    await mouse('mousePressed', 100, 450, 1, SHIFT, ruled);
+    await mouse('mouseReleased', 100, 450, 1, SHIFT, ruled);
+    await mouse('mousePressed', 100, 450, 2, SHIFT, ruled);
+    await mouse('mouseReleased', 100, 450, 2, SHIFT, ruled);
     rs = await until(async () => {
       const v = await evalIn(ruled, SNAP);
       return v.ml === '425px' && v.mr === '425px' ? v : null;
-    }, 3000, 'dblclick reset returns to rule widths');
-    check('double-click reset restores the rule defaults on a matching page', true,
+    }, 3000, 'modifier dblclick reset returns to rule widths');
+    check('modifier + dblclick reset restores the rule defaults on a matching page', true,
       `ml=${rs.ml} mr=${rs.mr}`);
     // Clear the rules so later sections see the plain global defaults.
     await settingsSet({ theme: 'light', defaultLeft: 200, defaultRight: 200 });
@@ -670,10 +686,10 @@ async function main() {
     // The gesture reference renders, with platform modifier keycaps filled in.
     const gestures = await evalIn(opts, `({
       rows: [...document.querySelectorAll('.gesture')].length,
-      modKeys: document.querySelectorAll('#modKeys kbd').length,
+      modKeys: document.querySelectorAll('.modkeys kbd').length,
     })`);
     check('options: gesture reference rendered with modifier keycaps',
-      gestures.rows === 5 && gestures.modKeys >= 3, JSON.stringify(gestures));
+      gestures.rows === 6 && gestures.modKeys >= 6, JSON.stringify(gestures));
 
     // Rules editor: remote rules render as rows; adding and removing rows
     // saves through the same save-on-change path as every other field.

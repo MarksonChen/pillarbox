@@ -254,15 +254,21 @@ SQZ.panels ??= (() => {
 
     handle.addEventListener('dblclick', () => {
       if (!callbacks) return;
-      const target = widths[side] > 0
+      setSideWidth(side, widths[side] > 0
         ? 0
-        : SQZ.clampDrag(lastNonZero[side], widths[other]);
-      widths[side] = target;
-      noteWidths(widths);
-      applyWidths();
-      callbacks.onDrag?.(side, { ...widths });
-      callbacks.onDragEnd?.(side);
+        : SQZ.clampDrag(lastNonZero[side], widths[other]));
     });
+  }
+
+  // One-shot width change outside a drag (the dblclick gestures): adopt,
+  // paint, and report it like a finished drag so the orchestrator squeezes
+  // and persists through the usual path.
+  function setSideWidth(side, target) {
+    widths[side] = target;
+    noteWidths(widths);
+    applyWidths();
+    callbacks.onDrag?.(side, { ...widths });
+    callbacks.onDragEnd?.(side);
   }
 
   function mount(opts) {
@@ -316,11 +322,19 @@ SQZ.panels ??= (() => {
       root.append(panel);
       els[side] = { panel, handle, readout };
       wireDrag(side, handle, readout);
-      // Double-click on a panel's empty space: back to the default widths.
-      // Handle dblclicks bubble up here too — those collapse/restore instead.
+      // Double-click on the panel body: plain collapses THIS side — the
+      // whole sidebar is the target people actually aim for, and with one
+      // wide sidebar the 10px edge handle is the only alternative. With
+      // any modifier held it restores BOTH sides to the defaults instead,
+      // matching the drag convention (modifier = both sides). Handle
+      // dblclicks bubble up here too — those collapse/restore on their own.
       panel.addEventListener('dblclick', (e) => {
-        if (e.target !== panel) return;
-        callbacks?.onReset?.();
+        if (e.target !== panel || !callbacks) return;
+        if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
+          callbacks.onReset?.();
+        } else if (widths[side] > 0) {
+          setSideWidth(side, 0);
+        }
       });
     }
     applyWidths();

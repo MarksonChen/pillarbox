@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Pillarbox: Push Page Left/Right/Inward",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Push page content leftward / rightward / inward with adjustable sidebars",
   "permissions": ["storage", "scripting"],
   "host_permissions": ["<all_urls>"],

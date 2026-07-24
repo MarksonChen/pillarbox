@@ -234,15 +234,16 @@ $('#openShortcuts').addEventListener('click', () => {
   chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
 });
 
-// Gesture legend: any modifier key mirrors a drag to the other sidebar.
-// Show this platform's modifiers as keycaps.
+// Gesture legend: any modifier key means "both sides" (mirrored drag,
+// reset). Show this platform's modifiers as keycaps wherever they appear.
 function renderModKeys() {
   const mac = navigator.platform.startsWith('Mac');
-  const box = $('#modKeys');
-  for (const mod of mac ? ['⇧', '⌃', '⌥', '⌘'] : ['Shift', 'Ctrl', 'Alt']) {
-    const key = document.createElement('kbd');
-    key.textContent = mod;
-    box.append(key);
+  for (const box of document.querySelectorAll('.modkeys')) {
+    for (const mod of mac ? ['⇧', '⌃', '⌥', '⌘'] : ['Shift', 'Ctrl', 'Alt']) {
+      const key = document.createElement('kbd');
+      key.textContent = mod;
+      box.append(key);
+    }
   }
 }
 
