@@ -353,7 +353,14 @@ if (!SQZ.booted) {
         if (!busy) {
           busy = true;
           try {
-            if (phase === 'active') {
+            if (phase === 'active' && !rec.left && !rec.right) {
+              // Both sides collapsed: the page already looks un-squeezed,
+              // so a plain toggle-off would be invisible and the button
+              // would feel dead. Make the click mean "bring the sidebars
+              // back" — this page's defaults, rule or global.
+              await persist({ on: true, ...defaultWidths() });
+              if (idle()) applyWidthsToPage();
+            } else if (phase === 'active') {
               disable();
               await persist({ on: false });
             } else {

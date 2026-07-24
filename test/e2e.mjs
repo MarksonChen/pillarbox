@@ -464,6 +464,26 @@ async function main() {
     }, 3000, 'modifier dblclick resets to defaults');
     check('modifier + dblclick on a sidebar restores default widths', true,
       `ml=${s.ml} mr=${s.mr}`);
+
+    // Both sides collapsed -> the page looks un-squeezed and a toggle-off
+    // would be invisible; the toolbar click must instead restore this
+    // page's defaults (and report on:true, not a toggle to off).
+    await mouse('mousePressed', 100, 450, 1); await mouse('mouseReleased', 100, 450, 1);
+    await mouse('mousePressed', 100, 450, 2); await mouse('mouseReleased', 100, 450, 2);
+    await until(async () => (await evalIn(page, SNAP)).ml === '0px', 3000, 'left collapsed');
+    await mouse('mousePressed', 1300, 450, 1); await mouse('mouseReleased', 1300, 450, 1);
+    await mouse('mousePressed', 1300, 450, 2); await mouse('mouseReleased', 1300, 450, 2);
+    await until(async () => {
+      const v = await evalIn(page, SNAP);
+      return v.ml === '0px' && v.mr === '0px';
+    }, 3000, 'both sides collapsed');
+    const revive = await toggleViaWorker(`${BASE}/page.html`);
+    s = await until(async () => {
+      const v = await evalIn(page, SNAP);
+      return v.ml === '200px' && v.mr === '200px' && v.host ? v : null;
+    }, 3000, 'toolbar click revives collapsed sidebars');
+    check('toolbar click restores defaults when both sides are collapsed',
+      revive && revive.on === true, `on=${revive?.on} ml=${s.ml} mr=${s.mr}`);
     // Put the left side back at 320 for the persistence checks below.
     await mouse('mousePressed', 200, 450, 1);
     for (const x of [220, 280, 320]) await mouse('mouseMoved', x, 450);

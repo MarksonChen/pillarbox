@@ -6,7 +6,9 @@ put their content hard-left, hard-right, or across the full window width.
 
 - **Click the toolbar icon** (or press `Alt+Shift+S`) to toggle the sidebars
   on the current site. The page content genuinely **reflows** into the inner
-  region — it is not just covered.
+  region — it is not just covered. If both sidebars are collapsed, the
+  click brings them back to the default widths instead of toggling an
+  invisible state off.
 - **Drag** a sidebar's inner edge to resize it; left and right are
   independent. Hold **any modifier key** (⇧ ⌃ ⌥ ⌘) while dragging to move
   both sidebars together by the same amount — press or release the key
