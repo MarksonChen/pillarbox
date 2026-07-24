@@ -15,6 +15,9 @@ put their content hard-left, hard-right, or across the full window width.
   to your default widths. A sidebar can go past the middle when the other side is narrow
   — the only limit is that at least 200px of page always stays visible
   between them.
+- **Zoom-stable**: sidebar widths are kept in pixels at 100% page zoom, so
+  a sidebar stays the same size on screen at any zoom level — zooming
+  changes the size of the page's text, not the width of the pillars.
 - **Per-page memory with auto-restore**: each exact URL (path + query; the
   hash is ignored) remembers whether the sidebars are on and how wide they
   are, and re-applies that on every reload and future visit until you toggle
@@ -71,6 +74,17 @@ put their content hard-left, hard-right, or across the full window width.
   `visibility:visible !important` inline, because some sites hide all
   undefined custom elements as an anti-flicker guard (reddit's
   `:not(:defined){visibility:hidden}`).
+- **Page zoom**: zoom scales the CSS px unit itself, so a stored width
+  applied verbatim would grow on screen as the user zooms in — squeezing
+  the content column a second time on top of the zoom. Widths are stored as
+  px at 100% zoom and divided by the tab's zoom factor on the way into the
+  page (multiplied back on the way out of a drag); every clamp, panel and
+  inset in between stays in ordinary CSS px. The factor itself lives in
+  `chrome.tabs`, which content scripts can't reach, so the service worker
+  relays it — on request at boot and after a bfcache return, and as a push
+  from `tabs.onZoomChange`. Neither member needs a permission. A resize
+  whose `devicePixelRatio` moved is the cheap in-page hint that the zoom may
+  have changed, and the only thing that triggers a re-query.
 - **Surviving extension reloads**: reloading or updating the extension
   orphans the content script in every open tab — `chrome.runtime.id` goes
   undefined and each `chrome.*` call throws "Extension context invalidated".
@@ -107,7 +121,7 @@ put their content hard-left, hard-right, or across the full window width.
 
 ```
 manifest.json          extension wiring
-background.js          service worker: icon click -> toggle message (+ inject fallback)
+background.js          service worker: icon click -> toggle message (+ inject fallback), zoom relay
 shared/defaults.js     constants shared by all contexts
 content/squeeze.js     html-margin reflow + style watcher
 content/fixed-bars.js  escaping-element manager (fixed bars, vw-unit shells)
@@ -121,7 +135,8 @@ test/                  test pages + end-to-end script
 State: `chrome.storage.sync['settings']` holds `{theme, defaultLeft,
 defaultRight, colorLight, colorDark, showReadout}`;
 `chrome.storage.local['page:<origin+path+query>']` holds `{on, left, right, t}`
-per page (`t` is the last-used timestamp driving the 1000-page LRU cap).
+per page (widths in px at 100% zoom; `t` is the last-used timestamp driving
+the 1000-page LRU cap).
 
 ### Testing
 
@@ -145,6 +160,6 @@ node test/e2e.mjs
 
 The script launches a throwaway headless profile, toggles via the real
 message path, and asserts reflow, fixed-bar insetting, per-page auto-restore
-after reload, live settings flips, theming, and survival of a
-`style-src 'none'` CSP. It writes screenshots to `$SHOT_DIR` (default: OS
+after reload, zoom-stable widths (change + zoomed page load), live settings
+flips, theming, and survival of a `style-src 'none'` CSP. It writes screenshots to `$SHOT_DIR` (default: OS
 temp dir).

@@ -44,6 +44,26 @@ chrome.storage.onChanged.addListener((changes, area) => {
   pruneTimer = setTimeout(() => prunePages().catch(() => {}), 3000);
 });
 
+// Page zoom lives in chrome.tabs, which a content script cannot reach, so
+// the worker relays it: the exact factor on request (boot, bfcache return)
+// and a push on every change. Neither member needs a permission — they are
+// not among the chrome.tabs features gated on "tabs" or host access, so
+// this costs no new install warning.
+chrome.tabs.onZoomChange.addListener(({ tabId, newZoomFactor }) => {
+  chrome.tabs.sendMessage(tabId, { type: SQZ.MSG.ZOOM, zoom: newZoomFactor })
+    .catch(() => {}); // no content script there (chrome://, PDF viewer, ...)
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== SQZ.MSG.GET_ZOOM) return;
+  const tabId = sender.tab?.id;
+  if (tabId === undefined) return; // not from a tab; nothing to measure
+  chrome.tabs.getZoom(tabId)
+    .then((zoom) => sendResponse({ zoom }))
+    .catch(() => sendResponse({ zoom: 1 })); // tab gone mid-flight
+  return true; // keep the channel open for the async response
+});
+
 function flashBadge(tabId) {
   // Signal "can't run here" (chrome://, Web Store, PDF viewer, ...).
   chrome.action.setBadgeBackgroundColor({ tabId, color: '#c0392b' })

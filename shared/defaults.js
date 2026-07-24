@@ -25,7 +25,11 @@ SQZ.sanitizeColor = (value, fallback) =>
 SQZ.SETTINGS_KEY = 'settings';      // chrome.storage.sync
 SQZ.PAGE_PREFIX = 'page:';          // chrome.storage.local, one key per page URL
 SQZ.LEGACY_SITE_PREFIX = 'site:';   // pre-0.2 per-origin records, cleaned on install
-SQZ.MSG = Object.freeze({ TOGGLE: 'SQZ_TOGGLE' });
+SQZ.MSG = Object.freeze({
+  TOGGLE: 'SQZ_TOGGLE',
+  ZOOM: 'SQZ_ZOOM',         // worker -> content: the tab's zoom factor changed
+  GET_ZOOM: 'SQZ_GET_ZOOM', // content -> worker: what is this tab's zoom?
+});
 SQZ.MAX_WIDTH = 800;                // cap for the default-width inputs in options
 
 // Must mirror manifest.json content_scripts[0].js exactly (same files, same
@@ -63,6 +67,15 @@ SQZ.MIN_GAP = 200;
 SQZ.viewportWidth = () => (document.compatMode === 'CSS1Compat'
   ? document.documentElement.clientWidth
   : innerWidth);
+
+// Page zoom scales the CSS px unit itself, so a width applied verbatim
+// grows on screen as the user zooms in — and the content column, already
+// narrowed by the zoom, gets squeezed a second time. Widths are therefore
+// stored as "px at 100% zoom" and converted at the two boundaries below;
+// everything in between (clamps, panels, margins, insets) stays in CSS px.
+SQZ.sanitizeZoom = (z) => (Number.isFinite(z) && z > 0 ? z : 1);
+SQZ.storedToCss = (px, zoom) => px / zoom;
+SQZ.cssToStored = (px, zoom) => Math.round(px * zoom);
 
 // Clamp one side while it is being dragged, given the other side's width.
 SQZ.clampDrag = (px, otherSide) => {

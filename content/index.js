@@ -16,6 +16,8 @@ if (!SQZ.booted) {
     let resizeRaf = 0;
     let torndown = false;  // orphaned (extension reloaded); everything detached
     let recEpoch = 0;      // bumped on every local rec write; stale async reads bail
+    let zoom = 1;          // page zoom factor; rec holds px at zoom 1
+    let zoomDpr = devicePixelRatio; // the dpr that went with `zoom`
     let settings = SQZ.mergeSettings(null);
     let rec = null;        // {on, left, right} | null — source of truth, stored unclamped
     const echoes = new Set(); // JSON stamps of our own storage writes
@@ -59,17 +61,19 @@ if (!SQZ.booted) {
 
     async function init() {
       cleanupStaleArtifacts();
-      let syncRaw, localRaw;
+      let syncRaw, localRaw, zoomRaw;
       try {
-        [syncRaw, localRaw] = await Promise.all([
+        [syncRaw, localRaw, zoomRaw] = await Promise.all([
           chrome.storage.sync.get(SQZ.SETTINGS_KEY),
           chrome.storage.local.get(KEY),
+          fetchZoom(), // the origin may carry a remembered zoom level
         ]);
       } catch (e) {
         if (orphaned()) return teardown(); // reload raced the boot
         throw e;
       }
       if (torndown) return; // orphaned while the read was in flight
+      setZoom(zoomRaw);
       settings = SQZ.mergeSettings(syncRaw[SQZ.SETTINGS_KEY]);
       rec = localRaw[KEY] ?? null;
       if (rec?.on) {
@@ -116,8 +120,48 @@ if (!SQZ.booted) {
       }
     }
 
+    // rec holds "px at 100% zoom"; the page works in CSS px, whose size on
+    // screen is itself scaled by the zoom factor. Dividing here (and
+    // multiplying back in onDrag) is what keeps a sidebar the same width on
+    // screen at every zoom level. The clamps run on the CSS px, so the
+    // minimum page gap stays a real gap in the zoomed layout.
     function effWidths() {
-      return SQZ.clampPair(rec.left, rec.right);
+      return SQZ.clampPair(SQZ.storedToCss(rec.left, zoom),
+        SQZ.storedToCss(rec.right, zoom));
+    }
+
+    // The tab's zoom factor lives in chrome.tabs, out of reach here; the
+    // service worker answers with it. Null on failure (worker torn down mid
+    // extension reload) — the caller then keeps the last known factor.
+    async function fetchZoom() {
+      try {
+        const res = await chrome.runtime.sendMessage({ type: SQZ.MSG.GET_ZOOM });
+        return res ? SQZ.sanitizeZoom(res.zoom) : null;
+      } catch {
+        return null;
+      }
+    }
+
+    // Adopt a new factor; returns whether it actually changed. Re-anchors
+    // the dpr that onResize compares against, so learning a zoom level and
+    // noticing one can't fight each other.
+    function setZoom(next) {
+      zoomDpr = devicePixelRatio;
+      if (next === null || SQZ.sanitizeZoom(next) === zoom) return false;
+      zoom = SQZ.sanitizeZoom(next);
+      SQZ.panels.setZoom(zoom);
+      return true;
+    }
+
+    // Re-query the authoritative factor and re-apply if it moved. A dpr
+    // change alone is not proof of a zoom change (the window may have moved
+    // to a display with a different scale), so the worker gets the last word.
+    async function syncZoom() {
+      const next = await fetchZoom();
+      if (torndown) return;
+      if (setZoom(next) && phase === 'active' && !suspended && !dragging) {
+        applyWidthsToPage();
+      }
     }
 
     function appearanceFromSettings() {
@@ -204,6 +248,17 @@ if (!SQZ.booted) {
     }
 
     function onMessage(msg, _sender, sendResponse) {
+      if (msg?.type === SQZ.MSG.ZOOM) {
+        ready.then(() => {
+          if (torndown) return;
+          // Mid-drag the pointer is already dictating the widths; the next
+          // pointermove converts through the new factor on its own.
+          if (setZoom(msg.zoom) && phase === 'active' && !suspended && !dragging) {
+            applyWidthsToPage();
+          }
+        });
+        return; // nothing to respond
+      }
       if (msg?.type !== SQZ.MSG.TOGGLE) return;
       (async () => {
         await ready;
@@ -294,7 +349,12 @@ if (!SQZ.booted) {
       // this viewport); adopt it verbatim. Re-clamping against a stale
       // stored other side would rescale both and desync page from panels.
       recEpoch++;
-      rec = { ...rec, on: true, left: pair.left, right: pair.right };
+      rec = {
+        ...rec,
+        on: true,
+        left: SQZ.cssToStored(pair.left, zoom),
+        right: SQZ.cssToStored(pair.right, zoom),
+      };
       SQZ.squeeze.update(pair.left, pair.right);
       SQZ.fixedBars.update(pair.left, pair.right);
     }
@@ -316,6 +376,15 @@ if (!SQZ.booted) {
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = 0;
         if (phase !== 'active' || suspended || dragging) return;
+        // A zoom change arrives here too (the layout viewport resizes), and
+        // devicePixelRatio — zoom times the display scale — has already
+        // moved with it. That makes it a free filter for "the zoom may have
+        // changed": ordinary window resizes leave it alone, so the worker is
+        // only asked when there is something to ask about.
+        if (devicePixelRatio !== zoomDpr) {
+          zoomDpr = devicePixelRatio; // don't re-ask on every frame of the reflow
+          syncZoom();
+        }
         // Re-clamp for the new viewport; rec itself stays unclamped so a
         // temporarily small window doesn't permanently shrink saved widths.
         applyWidthsToPage();
@@ -362,9 +431,10 @@ if (!SQZ.booted) {
     async function onPageShow(e) {
       if (!e.persisted) return;
       await ready;
-      // Back from the bfcache; storage (and the URL) may have moved on
-      // while the page was frozen.
+      // Back from the bfcache; storage, the URL and the tab's zoom level
+      // may all have moved on while the page was frozen.
       KEY = SQZ.pageKey(location.href);
+      await syncZoom();
       await refreshRecord(true);
     }
 

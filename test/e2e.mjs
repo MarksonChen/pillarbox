@@ -409,6 +409,50 @@ async function main() {
       return v.ml === '320px' && v.mr === '200px';
     }, 3000, 'plain drag restores 320/200');
 
+    // ---------- page zoom ----------
+    // Widths are stored as px at 100% zoom, so the sidebars keep their size
+    // on screen when the page is zoomed: at 2x, the 320/200 record must be
+    // applied as 160/100 CSS px (and the fixed navbar follow). Zoom is
+    // per-origin here (Chrome's default scope), so it must go back to 1
+    // before the later sections open more pages on this origin.
+    const setZoomViaWorker = (urlPrefix, factor) => evalIn(sw, `(async () => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((t) => (t.url || '').startsWith(${JSON.stringify(urlPrefix)}));
+      if (!tab) throw new Error('no tab matches ${urlPrefix}');
+      await chrome.tabs.setZoom(tab.id, ${factor});
+      return true;
+    })()`);
+    const ZOOMED = async () => {
+      const v = await evalIn(page, SNAP);
+      return v.ml === '160px' && v.mr === '100px' && v.nav && near(v.nav.left, 160) ? v : null;
+    };
+
+    await setZoomViaWorker(`${BASE}/page.html`, 2);
+    s = await until(ZOOMED, 5000, 'zoom change re-applies widths through the factor');
+    check('2x zoom halves the CSS px widths (constant size on screen)', true,
+      `ml=${s.ml} mr=${s.mr} navLeft=${s.nav.left} cw=${s.cw}`);
+    const zoomed = await evalIn(sw, `chrome.storage.local.get(${JSON.stringify(PAGE_KEY)})`);
+    check('zooming leaves the stored (100%-zoom) widths untouched',
+      zoomed[PAGE_KEY]?.left === 320 && zoomed[PAGE_KEY]?.right === 200,
+      JSON.stringify(zoomed[PAGE_KEY]));
+
+    // Boot path: a fresh content script on an already-zoomed origin has to
+    // ask the worker for the factor before auto-restoring.
+    await evalIn(page, 'window.__sqzMark = 1; setTimeout(() => location.reload(), 0); true', false);
+    s = await until(async () => {
+      if (await evalIn(page, '!!window.__sqzMark')) return null; // old document
+      return ZOOMED();
+    }, 8000, 'auto-restore on a zoomed page load');
+    check('auto-restore on a zoomed page load applies the same on-screen size',
+      true, `ml=${s.ml} mr=${s.mr}`);
+
+    await setZoomViaWorker(`${BASE}/page.html`, 1);
+    await until(async () => {
+      const v = await evalIn(page, SNAP);
+      return v.ml === '320px' && v.mr === '200px' && near(v.nav.left, 320);
+    }, 5000, 'back to 100% zoom');
+    check('back at 100% zoom the stored widths apply verbatim', true);
+
     // Per-URL memory: a same-document (SPA) navigation to another URL has
     // no record and must close the sidebars; navigating back reopens them
     // with this URL's saved widths.

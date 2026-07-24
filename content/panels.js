@@ -90,7 +90,8 @@ SQZ.panels ??= (() => {
   let host = null;
   let els = null;      // {left: {panel, handle, readout}, right: {...}}
   let callbacks = null;
-  let widths = { left: 0, right: 0 };
+  let widths = { left: 0, right: 0 };  // CSS px, as displayed
+  let zoom = 1;                        // page zoom; see setZoom()
   const lastNonZero = { left: FALLBACK_WIDTH, right: FALLBACK_WIDTH };
   let appearance = {
     theme: SQZ.DEFAULT_SETTINGS.theme,
@@ -121,7 +122,9 @@ SQZ.panels ??= (() => {
     if (!els) return;
     for (const side of ['left', 'right']) {
       els[side].panel.style.width = widths[side] + 'px';
-      els[side].readout.textContent = Math.round(widths[side]) + ' px';
+      // Report the stored (zoom-1) px, so the number matches the default
+      // widths in the options page at any zoom level.
+      els[side].readout.textContent = SQZ.cssToStored(widths[side], zoom) + ' px';
     }
   }
 
@@ -148,6 +151,18 @@ SQZ.panels ??= (() => {
     for (const side of ['left', 'right']) {
       if (widths[side] > 0) lastNonZero[side] = widths[side];
     }
+    applyWidths();
+  }
+
+  // The panels themselves are always driven in CSS px by the orchestrator,
+  // which already divides out the zoom. Only two things here know about it:
+  // the readout's units, and the collapse/restore memory — rescaling it
+  // keeps a side collapsed at one zoom level coming back the same size on
+  // screen at another.
+  function setZoom(next) {
+    if (!(next > 0) || next === zoom) return;
+    for (const side of ['left', 'right']) lastNonZero[side] *= zoom / next;
+    zoom = next;
     applyWidths();
   }
 
@@ -347,6 +362,7 @@ SQZ.panels ??= (() => {
     mount,
     unmount,
     setWidths,
+    setZoom,
     setAppearance,
     setVisible,
   };
