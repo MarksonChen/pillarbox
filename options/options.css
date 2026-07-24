@@ -158,11 +158,38 @@ input[type="number"] {
 /* ---- per-URL rules ---- */
 .hint { margin: 2px 0 10px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 .hint code { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* Header, rows and the empty state share one column template so the
+   pattern, width and action columns stay aligned. */
+.rules-head,
+.rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 72px 88px;
+  gap: 8px;
+  align-items: center;
+}
+.rules-head {
+  padding: 2px 2px 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+/* No rules -> no header either; the empty-state box speaks for itself. */
+.rules-head:has(+ #rules:empty) { display: none; }
 #rules { display: flex; flex-direction: column; gap: 8px; }
-#rules:empty::after { content: "No rules yet."; color: var(--muted); font-size: 12.5px; }
-.rule { display: flex; align-items: center; gap: 8px; }
+#rules:empty::after {
+  content: "No rules — pages start from the global default widths.";
+  display: block;
+  padding: 16px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12.5px;
+}
 .rule input[type="text"] {
-  flex: 1;
   min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -171,9 +198,48 @@ input[type="number"] {
   color: var(--fg);
   font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.rule input[type="text"].invalid { border-color: #d24545; }
-.rule input[type="number"] { width: 68px; }
-.rule .rule-remove { padding: 5px 10px; flex: none; }
+.rule input[type="number"] { width: 100%; }
+.rule-actions { display: inline-flex; gap: 4px; justify-content: flex-end; }
+.rule-actions button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: 12px/1 inherit;
+  cursor: pointer;
+}
+.rule-actions button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.rule-actions .rule-remove:hover:not(:disabled) {
+  color: #d24545;
+  border-color: #d24545;
+  background: rgba(210, 69, 69, 0.1);
+}
+.rule-actions button:disabled { opacity: 0.35; cursor: default; }
+/* Invalid regex: red border plus a spelled-out reason on its own line. */
+.rule.invalid .rule-pattern { border-color: #d24545; }
+.rule-error {
+  display: none;
+  grid-column: 1 / -1;
+  margin: -2px 0 2px 2px;
+  color: #d24545;
+  font-size: 12px;
+}
+.rule.invalid .rule-error { display: block; }
+#addRule {
+  width: 100%;
+  margin: 10px 0 6px;
+  padding: 8px;
+  border-style: dashed;
+  color: var(--muted);
+}
+#addRule:hover { color: var(--accent); }
 
 /* ---- switches ---- */
 .switch {

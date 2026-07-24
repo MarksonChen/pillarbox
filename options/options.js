@@ -44,6 +44,28 @@ function markValidity(row) {
     try { new RegExp(input.value); } catch { ok = false; }
   }
   input.classList.toggle('invalid', !ok);
+  row.classList.toggle('invalid', !ok);
+  input.setAttribute('aria-invalid', String(!ok));
+}
+
+// First-match-wins makes order meaningful, so rows can be moved, not just
+// added and removed. Every mutation funnels through saveSettings(), which
+// reads the rows back in DOM order.
+function moveRule(row, dir) {
+  const sibling = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+  if (!sibling) return;
+  if (dir < 0) sibling.before(row);
+  else sibling.after(row);
+  syncMoveButtons();
+  saveSettings();
+}
+
+function syncMoveButtons() {
+  const rows = [...document.querySelectorAll('#rules .rule')];
+  rows.forEach((row, i) => {
+    row.querySelector('.rule-up').disabled = i === 0;
+    row.querySelector('.rule-down').disabled = i === rows.length - 1;
+  });
 }
 
 function ruleRow(rule) {
@@ -53,17 +75,23 @@ function ruleRow(rule) {
     <input type="text" class="rule-pattern" spellcheck="false" autocomplete="off"
            placeholder="https://www\\.example\\.com/articles" aria-label="URL regex">
     <input type="number" class="rule-left" min="0" max="${SQZ.MAX_WIDTH}" step="5"
-           aria-label="Left width">
-    <span class="unit">×</span>
+           aria-label="Left width in px">
     <input type="number" class="rule-right" min="0" max="${SQZ.MAX_WIDTH}" step="5"
-           aria-label="Right width">
-    <span class="unit">px</span>
-    <button type="button" class="ghost rule-remove" title="Remove rule">✕</button>`;
+           aria-label="Right width in px">
+    <span class="rule-actions">
+      <button type="button" class="rule-up" title="Move up" aria-label="Move rule up">↑</button>
+      <button type="button" class="rule-down" title="Move down" aria-label="Move rule down">↓</button>
+      <button type="button" class="rule-remove" title="Remove rule" aria-label="Remove rule">✕</button>
+    </span>
+    <span class="rule-error">Invalid regular expression — this rule is ignored.</span>`;
   row.querySelector('.rule-pattern').value = rule.pattern ?? '';
   row.querySelector('.rule-left').value = SQZ.clampDefault(rule.left);
   row.querySelector('.rule-right').value = SQZ.clampDefault(rule.right);
+  row.querySelector('.rule-up').addEventListener('click', () => moveRule(row, -1));
+  row.querySelector('.rule-down').addEventListener('click', () => moveRule(row, +1));
   row.querySelector('.rule-remove').addEventListener('click', () => {
     row.remove();
+    syncMoveButtons();
     saveSettings();
   });
   markValidity(row);
@@ -74,6 +102,7 @@ function renderRules(rules) {
   const box = $('#rules');
   box.textContent = '';
   for (const rule of Array.isArray(rules) ? rules : []) box.append(ruleRow(rule));
+  syncMoveButtons();
 }
 
 function rulesFromForm() {
@@ -161,6 +190,7 @@ $('#addRule').addEventListener('click', () => {
     right: SQZ.clampDefault($('#defaultRight').value),
   });
   $('#rules').append(row);
+  syncMoveButtons();
   row.querySelector('.rule-pattern').focus();
 });
 

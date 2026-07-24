@@ -709,6 +709,25 @@ async function main() {
         && st.settings.rules[1].left === 425;
     }, 3000, 'added rule saved');
     check('options: adding a rule saves it', true);
+    // First match wins, so order is data: moving the second rule up must
+    // persist the swapped order (and the edge buttons stay disabled).
+    const moveState = await evalIn(opts, `(() => {
+      document.querySelectorAll('.rule-up')[1].click();
+      const rows = document.querySelectorAll('#rules .rule');
+      return {
+        first: rows[0].querySelector('.rule-pattern').value,
+        upDisabled: rows[0].querySelector('.rule-up').disabled,
+        downDisabled: rows[rows.length - 1].querySelector('.rule-down').disabled,
+      };
+    })()`);
+    await until(async () => {
+      const st = await evalIn(sw, `chrome.storage.sync.get('settings')`);
+      return st.settings?.rules?.[0]?.pattern === 'zhihu\\.com/question';
+    }, 3000, 'reorder saved');
+    check('options: moving a rule up saves the new order (edge buttons disabled)',
+      moveState.first === 'zhihu\\.com/question'
+        && moveState.upDisabled === true && moveState.downDisabled === true,
+      JSON.stringify(moveState));
     await evalIn(opts, `(document.querySelectorAll('.rule-remove')[1].click(), true)`);
     await until(async () => {
       const st = await evalIn(sw, `chrome.storage.sync.get('settings')`);
