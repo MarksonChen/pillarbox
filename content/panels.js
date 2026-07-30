@@ -30,8 +30,9 @@ SQZ.panels ??= (() => {
   border-left: 1px solid rgba(0, 0, 0, 0.18);
   box-shadow: inset 10px 0 14px -12px rgba(0, 0, 0, 0.4);
 }
-:host([data-theme="dark"]) .panel.left { border-right-color: rgba(255, 255, 255, 0.14); }
-:host([data-theme="dark"]) .panel.right { border-left-color: rgba(255, 255, 255, 0.14); }
+/* Dark panels get no edge line — transparent (not 0) keeps the geometry. */
+:host([data-theme="dark"]) .panel.left { border-right-color: transparent; }
+:host([data-theme="dark"]) .panel.right { border-left-color: transparent; }
 .panel.left.offscreen { transform: translateX(-100%); }
 .panel.right.offscreen { transform: translateX(100%); }
 :host(.dragging) .panel { transition: none; }

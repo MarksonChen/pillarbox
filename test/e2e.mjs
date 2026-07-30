@@ -696,20 +696,22 @@ async function main() {
     }, 3000, 'options save-on-change');
     check('options: theme change saves and re-themes the page', true);
 
-    // The preview panels animate their color over ~150ms; wait for the end
-    // state — this also verifies the live preview follows the settings.
+    // The dark theme inverts the whole poster (ink/paper swap), and the
+    // tint hex readouts follow the stored colors.
     await until(async () => (await evalIn(opts,
-      `getComputedStyle(document.getElementById('pvLeft')).backgroundColor`)) === 'rgb(29, 33, 38)',
-      3000, 'preview reflects the dark sidebar color');
-    check('options: live preview follows the settings', true);
+      `getComputedStyle(document.body).backgroundColor`)) === 'rgb(0, 0, 0)',
+      3000, 'poster inverted by the dark theme');
+    check('options: dark theme inverts the poster; tint readouts follow',
+      (await evalIn(opts, `document.getElementById('colorDarkHex').textContent`)) === '#1d2126');
 
-    // The gesture reference renders, with platform modifier keycaps filled in.
+    // The gesture ledger renders, with this platform's modifier run filled in.
     const gestures = await evalIn(opts, `({
       rows: [...document.querySelectorAll('.gesture')].length,
-      modKeys: document.querySelectorAll('.modkeys kbd').length,
+      modRun: document.querySelector('.modkeys')?.textContent ?? '',
     })`);
-    check('options: gesture reference rendered with modifier keycaps',
-      gestures.rows === 6 && gestures.modKeys >= 6, JSON.stringify(gestures));
+    check('options: gesture ledger rendered with platform modifiers',
+      gestures.rows === 6 && /^(⇧\/⌃\/⌥\/⌘|SHIFT\/CTRL\/ALT)$/.test(gestures.modRun),
+      JSON.stringify(gestures));
 
     // Rules editor: remote rules render as rows; adding and removing rows
     // saves through the same save-on-change path as every other field.

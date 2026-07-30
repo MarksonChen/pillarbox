@@ -39,7 +39,6 @@ SQZ.MSG = Object.freeze({
   ZOOM: 'SQZ_ZOOM',         // worker -> content: the tab's zoom factor changed
   GET_ZOOM: 'SQZ_GET_ZOOM', // content -> worker: what is this tab's zoom?
 });
-SQZ.MAX_WIDTH = 800;                // cap for the default-width inputs in options
 
 // Must mirror manifest.json content_scripts[0].js exactly (same files, same
 // order); background.js re-injects this list into tabs that were already
@@ -93,9 +92,13 @@ SQZ.makeEchoes = () => {
   };
 };
 
-// Clamp a width setting to a sane stored value (options inputs, URL rules).
-SQZ.clampDefault = (value) =>
-  Math.max(0, Math.min(SQZ.MAX_WIDTH, Math.round(Number(value)) || 0));
+// Sanitize a width setting (options inputs, URL rules): a non-negative
+// whole px count, deliberately uncapped — clampPair fits whatever is
+// stored to the actual window at apply time.
+SQZ.clampDefault = (value) => {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
 
 // First matching per-URL rule, or null. Patterns are regexes tested against
 // origin + path + query — the #hash is ignored, mirroring pageKey — and an

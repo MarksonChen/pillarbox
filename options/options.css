@@ -1,307 +1,494 @@
+/* "Tower" — a brutalist ink-on-paper poster. The layout is designed on a
+   1440px canvas; --u is the scale unit (1px at >=1440, proportionally less
+   below), applied to the display type so the poster shrinks as one piece.
+   Small mono text and rules keep their fixed sizes. Dark theme is a plain
+   ink/paper swap. */
 :root {
   color-scheme: light;
-  --bg: #f3f5f8;
-  --card: #ffffff;
-  --fg: #171a1f;
-  --muted: #69707c;
-  --border: #e3e7ee;
-  --accent: #2f6bff;
-  --accent-soft: rgba(47, 107, 255, 0.12);
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 24px -12px rgba(16, 24, 40, 0.12);
+  --ink: #000000;
+  --paper: #ffffff;
+  --alert: #d02121;
+  /* cqw (body's inline size), not vw: the page runs its own pillars, and
+     when they squeeze <html> the poster must rescale into the inner column. */
+  --u: calc(min(100cqw, 1440px) / 1440);
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #101318;
-  --card: #191d24;
-  --fg: #e7eaee;
-  --muted: #9aa3b0;
-  --border: #2a303a;
-  --accent: #6f9bff;
-  --accent-soft: rgba(111, 155, 255, 0.16);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  --ink: #ffffff;
+  --paper: #000000;
+  --alert: #ff5c5c;
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  container-type: inline-size;
 }
 
-main { max-width: 600px; margin: 0 auto; padding: 40px 20px 56px; }
+main {
+  position: relative;
+  overflow: hidden;
+  max-width: 1440px;
+  margin: 0 auto;
+}
 
-/* ---- header ---- */
-.hero { display: flex; align-items: center; gap: 13px; margin-bottom: 18px; }
-h1 {
+::selection { background: var(--ink); color: var(--paper); }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* ---- spec strip & masthead ---- */
+.spec-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 14px;
+  padding: 10px 26px;
+  border-bottom: 3px solid var(--ink);
+  font: 600 12px/1.4 var(--mono);
+  letter-spacing: 0.08em;
+}
+
+.masthead { margin-top: 6px; }
+.mast-word {
+  /* Optical flush-left: cancel the glyph side bearing, scaled with the
+     type so nothing gets shaved off under a squeeze. */
+  margin-left: calc(-14 * var(--u));
+  font-size: calc(330 * var(--u));
+  font-weight: 800;
+  letter-spacing: -0.07em;
+  line-height: 0.76;
+  white-space: nowrap;
+}
+/* Wrap + scaled type: under a heavy squeeze the tagline shrinks, then
+   drops below BOX instead of crowding into the masthead. The line pull-up
+   scales with the type so PILLAR and BOX never collide. */
+.mast-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 36px;
+  margin-top: calc(-10 * var(--u));
+}
+.mast-tag {
   margin: 0;
-  font-family: "Avenir Next", Futura, "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-  font-size: 27px;
-  font-weight: 600;
-  letter-spacing: 0.005em;
-  background: linear-gradient(120deg, #58c6ff, #3b6cff);
+  padding-bottom: 16px;
+  font: 700 13px/1.7 var(--mono);
+  font-size: clamp(10px, calc(16 * var(--u)), 13px);
+  letter-spacing: 0.1em;
+}
+
+/* ---- sections: heavy rule, giant word on one side, mono label on the
+   other; .flip mirrors the head (sections 02 and 04) ---- */
+.sec { border-top: 8px solid var(--ink); margin-top: 44px; }
+.sec-head { display: flex; align-items: flex-end; justify-content: space-between; }
+.sec-label {
+  padding: 0 26px 14px;
+  font: 700 12px/1.7 var(--mono);
+  letter-spacing: 0.14em;
+}
+.sec-head:not(.flip) .sec-label { padding-left: 0; text-align: right; }
+.word {
+  font-size: calc(240 * var(--u));
+  font-weight: 800;
+  letter-spacing: -0.06em;
+  line-height: 0.82;
+  white-space: nowrap;
+}
+.sec-head:not(.flip) .word { margin-left: calc(-10 * var(--u)); }
+/* Solid glyphs bleed off the edge on purpose; an outlined word would get
+   its stroke clipped there, so WIDTH sits inside the border instead. */
+.sec-head:not(.flip) .word-outline { margin-left: calc(5 * var(--u)); }
+.word-outline { color: transparent; -webkit-text-stroke: 4px var(--ink); }
+/* Under a heavy squeeze the head stacks: giant word on top, description on
+   its own row below (word first in both flip directions). */
+@container (max-width: 720px) {
+  .sec-head { flex-direction: column; align-items: stretch; }
+  .sec-head.flip { flex-direction: column-reverse; }
+  .sec-head .sec-label,
+  .sec-head:not(.flip) .sec-label { padding: 0 26px 12px; }
+  .sec-head.flip .word { text-align: right; }
+}
+.word-screen {
+  color: transparent;
+  background: repeating-linear-gradient(30deg, var(--ink) 0px 6px, transparent 6px 11px);
   -webkit-background-clip: text;
   background-clip: text;
-  color: transparent;
 }
 
-/* ---- live preview (nested in the Appearance card) ---- */
-.preview {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--bg);
-  margin: 8px 0 10px;
-}
-.pv-chrome {
-  position: relative;
+/* ---- 01: the width inputs ARE the giant numbers in the ink band ---- */
+.width-band {
   display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 8px 11px;
-  border-bottom: 1px solid var(--border);
+  align-items: baseline;
+  justify-content: center;
+  gap: 30px;
+  margin-top: 22px;
+  padding: 6px 26px 20px;
+  background: var(--ink);
+  color: var(--paper);
 }
-.pv-chrome i { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
-.pv-chrome span {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--muted);
+.width-cell { display: flex; flex-direction: column; align-items: center; }
+.width-input {
+  width: 3.2ch;
+  /* The trailing negative letter-spacing pulls the content edge over the
+     last digit; the right padding gives that edge back. */
+  padding: 0 0.07em 0 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: calc(180 * var(--u));
+  font-weight: 800;
+  letter-spacing: -0.07em;
+  line-height: 0.9;
+  text-align: center;
+  appearance: textfield;
+  /* Focus always selects the whole number (see options.js): the inverse
+     selection block IS the focus indicator — no outline, no caret. */
+  caret-color: transparent;
 }
-.pv-page { display: flex; height: 108px; background: var(--pv-page-bg, #fff); transition: background 0.2s; }
-.pv-panel { width: 14%; flex: none; transition: width 0.15s ease, background 0.15s ease; }
-.pv-content { flex: 1; display: flex; flex-direction: column; gap: 8px; justify-content: center; padding: 0 8%; }
-.pv-content i { height: 7px; border-radius: 4px; background: var(--pv-line, #e6e9ef); transition: background 0.2s; }
+.width-input::-webkit-outer-spin-button,
+.width-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+/* Widths are uncapped, so the box grows with the number where supported. */
+@supports (field-sizing: content) {
+  .width-input { field-sizing: content; width: auto; min-width: 1.3ch; max-width: 6ch; }
+}
+.width-input:focus-visible { outline: none; }
+.width-input::selection { background: var(--paper); color: var(--ink); }
+.width-caption {
+  margin-top: 4px;
+  font: 700 13px/1.4 var(--mono);
+  letter-spacing: 0.3em;
+  text-align: center;
+}
+.width-slash {
+  align-self: center;
+  font-size: calc(86 * var(--u));
+  font-weight: 800;
+  line-height: 0.9;
+}
 
-/* ---- cards & rows ---- */
-.card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 6px 18px 12px;
-  margin-top: 16px;
-  box-shadow: var(--shadow);
-}
-h2 {
-  font-size: 11.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin: 14px 0 4px;
-}
-.field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
-.field + .field { border-top: 1px solid var(--border); }
-.field.trailing { justify-content: flex-end; padding-top: 4px; border-top: 0; }
-.label { font-weight: 500; }
-
-/* ---- segmented theme control ---- */
-.segmented {
-  display: flex;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 3px;
-}
-.segmented label { position: relative; }
-.segmented input { position: absolute; opacity: 0; inset: 0; pointer-events: none; }
-.segmented span {
+.readout {
   display: block;
-  padding: 4px 14px;
-  border-radius: 7px;
-  font-size: 13px;
-  color: var(--muted);
+  padding: 12px 26px 0;
+  font: 700 12px/1.5 var(--mono);
+  letter-spacing: 0.08em;
+  text-align: center;
   cursor: pointer;
   user-select: none;
 }
-.segmented input:checked + span {
-  background: var(--card);
-  color: var(--fg);
-  font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+.readout input { position: absolute; opacity: 0; pointer-events: none; }
+.readout .box::before {
+  content: "[ ]";
+  white-space: pre;
+  padding: 2px 6px;
+  background: var(--ink);
+  color: var(--paper);
 }
-.segmented input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.readout input:checked ~ .box::before { content: "[X]"; }
+.readout input:focus-visible ~ .box { outline: 2px solid var(--ink); outline-offset: 3px; }
 
-/* ---- colors ---- */
-.colorwrap { display: flex; align-items: center; gap: 10px; }
-.colorwrap code { color: var(--muted); font: 12px ui-monospace, Menlo, monospace; }
-input[type="color"] {
-  width: 44px;
-  height: 30px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--card);
+/* ---- 02: theme chips (giant type as the control) & pillar tints ---- */
+.chips {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.chip { position: relative; }
+.chip input { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
+.chip span {
+  display: block;
+  padding: 6px 18px 12px;
+  font-size: calc(86 * var(--u));
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: transparent;
+  -webkit-text-stroke: 3px var(--ink);
+  cursor: pointer;
+  user-select: none;
+}
+.chip input:checked + span {
+  background: var(--ink);
+  color: var(--paper);
+  -webkit-text-stroke: 0;
+}
+.chip input:focus-visible + span { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+.tints {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 0 26px;
+  font: 700 12px/1.4 var(--mono);
+}
+.tints code { font: inherit; text-transform: uppercase; }
+.tint-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
   cursor: pointer;
 }
-input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
-input[type="color"]::-webkit-color-swatch { border: none; border-radius: 5px; }
-
-/* ---- numbers ---- */
-.numwrap { display: flex; align-items: center; gap: 8px; }
-input[type="number"] {
-  width: 84px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
+.tint-chip { width: 38px; height: 26px; border: 2px solid var(--ink); }
+.tint-open[aria-expanded="true"] .tint-chip { box-shadow: 4px 4px 0 var(--ink); }
+/* The native pickers: invisible but clickable-by-script, so the system
+   dialog can still be summoned and anchors near the tints row. */
+.tint-value {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
-.unit { color: var(--muted); }
 
-/* ---- per-URL rules ---- */
-.hint { margin: 2px 0 10px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
-.hint code { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tint-editor {
+  margin: 16px 26px 0;
+  border: 3px solid var(--ink);
+  padding: 14px 18px 16px;
+  font: 700 12px/1.4 var(--mono);
+  letter-spacing: 0.08em;
+}
+.tint-editor-head { display: flex; justify-content: space-between; margin-bottom: 14px; }
+.tint-swatches { display: flex; flex-wrap: wrap; justify-content: center; gap: 18px; }
+.tint-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.tint-swatch i { width: 54px; height: 30px; border: 2px solid var(--ink); background: var(--swatch); }
+.tint-swatch.active { font-weight: 700; }
+.tint-swatch.active i { box-shadow: 5px 5px 0 var(--ink); }
+.tint-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 16px;
+}
+.tint-hex input {
+  width: 9ch;
+  margin-left: 6px;
+  padding: 4px 6px;
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: uppercase;
+}
 
-/* Header, rows and the empty state share one column template so the
-   pattern, width and action columns stay aligned. */
+.linkish {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ---- 03: rules ledger ---- */
+.rules-note {
+  margin: 0;
+  padding: 12px 26px 10px;
+  font: 400 12px/1.5 var(--mono);
+}
+.rules-table { margin: 0 26px; }
 .rules-head,
 .rule {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 72px 72px 88px;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 90px 90px 70px;
   align-items: center;
 }
-.rules-head {
-  padding: 2px 2px 7px;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-/* No rules -> no header either; the empty-state box speaks for itself. */
+.rules-head { border-top: 3px solid var(--ink); font: 700 12px/1.4 var(--mono); }
+.rules-head span { padding: 7px 0; }
+.rules-head .ord { text-align: right; }
+/* No rules -> no ledger chrome; the empty-state box speaks for itself. */
 .rules-head:has(+ #rules:empty) { display: none; }
-#rules { display: flex; flex-direction: column; gap: 8px; }
+#rules:not(:empty) { border-bottom: 3px solid var(--ink); }
 #rules:empty::after {
-  content: "No rules — pages start from the global default widths.";
+  content: "NO RULES — PAGES START FROM THE GLOBAL DEFAULT WIDTHS.";
   display: block;
-  padding: 16px 12px;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
+  padding: 14px;
+  border: 2px dashed var(--ink);
+  font: 400 12px/1.5 var(--mono);
   text-align: center;
-  color: var(--muted);
-  font-size: 12.5px;
 }
-.rule input[type="text"] {
+.rule { border-top: 1px solid var(--ink); font: 400 13px/1.4 var(--mono); }
+.rule input {
   min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--fg);
-  font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.rule input[type="number"] { width: 100%; }
-.rule-actions { display: inline-flex; gap: 4px; justify-content: flex-end; }
-.rule-actions button {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-  font: 12px/1 inherit;
-  cursor: pointer;
-}
-.rule-actions button:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.rule-actions .rule-remove:hover:not(:disabled) {
-  color: #d24545;
-  border-color: #d24545;
-  background: rgba(210, 69, 69, 0.1);
-}
-.rule-actions button:disabled { opacity: 0.35; cursor: default; }
-/* Invalid regex: red border plus a spelled-out reason on its own line. */
-.rule.invalid .rule-pattern { border-color: #d24545; }
-.rule-error {
-  display: none;
-  grid-column: 1 / -1;
-  margin: -2px 0 2px 2px;
-  color: #d24545;
-  font-size: 12px;
-}
-.rule.invalid .rule-error { display: block; }
-#addRule {
   width: 100%;
-  margin: 10px 0 6px;
-  padding: 8px;
-  border-style: dashed;
-  color: var(--muted);
-}
-#addRule:hover { color: var(--accent); }
-
-/* ---- switches ---- */
-.switch {
-  appearance: none;
-  width: 40px;
-  height: 24px;
-  border-radius: 999px;
-  background: var(--border);
-  position: relative;
-  cursor: pointer;
-  transition: background 0.15s;
-  flex: none;
-  margin: 0;
-}
-.switch::before {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  transition: left 0.15s;
-}
-.switch:checked { background: var(--accent); }
-.switch:checked::before { left: 19px; }
-
-/* ---- buttons, keycaps ---- */
-button.ghost {
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  padding: 9px 0;
+  border: 0;
   background: transparent;
-  color: var(--fg);
+  color: inherit;
+  font: inherit;
+}
+.rule .rule-pattern { padding-right: 26px; }
+.rule input[type="number"] { appearance: textfield; }
+.rule input::-webkit-outer-spin-button,
+.rule input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.rule-actions { display: flex; justify-content: flex-end; }
+.rule-actions button {
+  padding: 9px 0 9px 8px;
+  border: 0;
+  background: none;
+  color: inherit;
   font: inherit;
   cursor: pointer;
 }
-button.ghost:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
-
-.shortcutwrap { display: flex; align-items: center; gap: 10px; }
-.keys { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
-.gesture { color: var(--muted); text-align: right; }
-.gesture kbd + kbd { margin-left: 3px; }
-kbd {
-  min-width: 26px;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-bottom-width: 2px;
-  border-radius: 7px;
-  background: var(--bg);
-  color: var(--fg);
+.rule-actions button:disabled { opacity: 0.3; cursor: default; }
+/* Invalid regex: red pattern plus a spelled-out reason on its own line. */
+.rule.invalid .rule-pattern { color: var(--alert); }
+.rule-error {
+  display: none;
+  grid-column: 1 / -1;
+  padding-bottom: 8px;
+  color: var(--alert);
+  font: 700 11px/1.4 var(--mono);
+  letter-spacing: 0.06em;
+}
+.rule.invalid .rule-error { display: block; }
+#addRule {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px;
+  border: 2px dashed var(--ink);
+  background: none;
+  color: inherit;
+  font: 700 13px/1.4 var(--mono);
   text-align: center;
-  /* System font, not monospace: SF/Segoe render ⌘ ⌥ ⇧ properly. */
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  font-size: 12.5px;
-  font-weight: 500;
+  cursor: pointer;
 }
 
-input[type="number"]:focus-visible,
-input[type="text"]:focus-visible,
-input[type="color"]:focus-visible,
-.switch:focus-visible,
-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* ---- 04: gesture ledger ---- */
+.gestures {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 60px;
+  padding: 6px 26px 0;
+  font: 400 12.5px/1.5 var(--mono);
+}
+.gesture {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--ink);
+}
+.gesture b { font-weight: 700; }
+/* Under a heavy squeeze the two-column ledger folds into one. */
+@container (max-width: 720px) {
+  .gestures { grid-template-columns: 1fr; }
+}
+
+/* ---- 05: shortcut keycaps ---- */
+.shortcut-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 14px 26px 0;
+  font: 700 12px/1.4 var(--mono);
+  letter-spacing: 0.14em;
+}
+.keycaps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Floored gap: the offset shadows must never bleed into the next cap. */
+  gap: max(20px, calc(26 * var(--u)));
+  margin-top: 24px;
+}
+.keycap {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(280 * var(--u));
+  height: calc(280 * var(--u));
+  border: max(3px, calc(7 * var(--u))) solid var(--ink);
+  box-shadow: max(6px, calc(14 * var(--u))) max(6px, calc(14 * var(--u))) 0 var(--ink);
+  background: var(--paper);
+  font-size: calc(190 * var(--u));
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+}
+/* Multi-letter caps (ALT, SHIFT, CTRL on Windows/Linux) get smaller type. */
+.keycap.wide { font-size: calc(56 * var(--u)); text-transform: uppercase; }
+/* No binding: giant outlined type, like an unselected theme chip. */
+.keycap-none {
+  padding: 6px 18px 12px;
+  font-size: calc(140 * var(--u));
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  color: transparent;
+  -webkit-text-stroke: 4px var(--ink);
+}
+.shortcut-foot {
+  margin: 28px 0 40px;
+  font: 700 12px/1.4 var(--mono);
+  letter-spacing: 0.14em;
+  text-align: center;
+}
+/* NOT SET casts no shadow, so the foot line snugs up to it. */
+.keycaps:has(.keycap-none) { margin-top: 10px; }
+.keycaps:has(.keycap-none) + .shortcut-foot { margin-top: 4px; }
+
+/* ---- bug row & ticker ---- */
+.bug-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 18px 26px;
+  border: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: inherit;
+  cursor: pointer;
+}
+.bug-row:focus-visible { outline-color: var(--paper); outline-offset: -6px; }
+.bug-big { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
+.bug-mono { font: 700 13px/1.4 var(--mono); letter-spacing: 0.1em; }
+
+.ticker {
+  padding: 8px 0;
+  border-top: 4px solid var(--paper);
+  background: var(--ink);
+  color: var(--paper);
+  font: 600 12px/1.4 var(--mono);
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* Two identical halves scroll by -50% for a seamless loop. */
+.ticker-inner { display: inline-block; animation: ticker-scroll 80s linear infinite; }
+@keyframes ticker-scroll { to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .ticker-inner { animation: none; } }

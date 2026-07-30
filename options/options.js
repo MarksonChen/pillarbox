@@ -1,8 +1,8 @@
 // Options page. Settings live in chrome.storage.sync. Per-page records live
 // in chrome.storage.local and are managed automatically (silently capped to
 // the most recent SQZ.MAX_PAGES by the service worker) — there is no memory
-// UI. Save-on-change; the preview updates live on every input; storage
-// changes from elsewhere re-render the page.
+// UI. Save-on-change; the tint hex readouts update live on every input;
+// storage changes from elsewhere re-render the page.
 const $ = (sel) => document.querySelector(sel);
 
 const scheme = matchMedia('(prefers-color-scheme: dark)');
@@ -14,10 +14,7 @@ function applyPageTheme(theme) {
   currentTheme = theme;
   document.documentElement.dataset.theme = resolvedDark(theme) ? 'dark' : 'light';
 }
-scheme.addEventListener('change', () => {
-  applyPageTheme(currentTheme);
-  updatePreview();
-});
+scheme.addEventListener('change', () => applyPageTheme(currentTheme));
 
 function formState() {
   return {
@@ -74,16 +71,16 @@ function ruleRow(rule) {
   row.innerHTML = `
     <input type="text" class="rule-pattern" spellcheck="false" autocomplete="off"
            placeholder="https://www\\.example\\.com/articles" aria-label="URL regex">
-    <input type="number" class="rule-left" min="0" max="${SQZ.MAX_WIDTH}" step="5"
+    <input type="number" class="rule-left" min="0" step="5"
            aria-label="Left width in px">
-    <input type="number" class="rule-right" min="0" max="${SQZ.MAX_WIDTH}" step="5"
+    <input type="number" class="rule-right" min="0" step="5"
            aria-label="Right width in px">
     <span class="rule-actions">
       <button type="button" class="rule-up" title="Move up" aria-label="Move rule up">↑</button>
       <button type="button" class="rule-down" title="Move down" aria-label="Move rule down">↓</button>
       <button type="button" class="rule-remove" title="Remove rule" aria-label="Remove rule">✕</button>
     </span>
-    <span class="rule-error">Invalid regular expression — this rule is ignored.</span>`;
+    <span class="rule-error">INVALID REGULAR EXPRESSION — THIS RULE IS IGNORED.</span>`;
   row.querySelector('.rule-pattern').value = rule.pattern ?? '';
   row.querySelector('.rule-left').value = SQZ.clampDefault(rule.left);
   row.querySelector('.rule-right').value = SQZ.clampDefault(rule.right);
@@ -118,23 +115,85 @@ function rulesFromForm() {
   });
 }
 
-// Mini mock of a squeezed page: panel colors follow the selected theme,
-// panel widths are proportional to the defaults on a nominal 1440px window.
-function updatePreview() {
-  const s = formState();
-  const dark = resolvedDark(s.theme);
-  const panel = dark ? s.colorDark : s.colorLight;
-  const pct = (px) => `${Math.min(42, (px / 1440) * 100)}%`;
-  $('#pvLeft').style.background = panel;
-  $('#pvRight').style.background = panel;
-  $('#pvLeft').style.width = pct(s.defaultLeft);
-  $('#pvRight').style.width = pct(s.defaultRight);
-  const pv = document.querySelector('.pv-page');
-  pv.style.setProperty('--pv-page-bg', dark ? '#0e1116' : '#ffffff');
-  pv.style.setProperty('--pv-line', dark ? '#232936' : '#e6e9ef');
-  $('#colorLightHex').textContent = s.colorLight;
-  $('#colorDarkHex').textContent = s.colorDark;
+// The hidden native color inputs remain the form's value holders; the row
+// chips, hex readouts and the open editor all mirror them.
+function syncTints() {
+  const light = $('#colorLight').value;
+  const dark = $('#colorDark').value;
+  $('#colorLightHex').textContent = light;
+  $('#colorDarkHex').textContent = dark;
+  $('#tintChipLight').style.background = light;
+  $('#tintChipDark').style.background = dark;
+  refreshTintEditor();
 }
+
+// ---- tint editor ----
+// A poster-styled picker: preset swatches, a hex field, and the system
+// dialog as the escape hatch. It only ever writes through the hidden
+// native inputs, so every change rides the normal save-on-change path.
+const TINT_PRESETS = {
+  // Neutrals first, then warm papers, cool blues, greens, pinks, violet.
+  light: [
+    '#eef0f3', '#ffffff', '#f7f8fa', '#e9ecf1', '#e5e5e5', '#dcdcdc',
+    '#f6f1e6', '#f2e8da', '#eee0c9', '#e7edf4', '#dfe8f2', '#d8e4ee',
+    '#e6efe8', '#dcebe2', '#f4e9ec', '#ece6f4',
+  ],
+  dark: [
+    '#1d2126', '#000000', '#0b0d10', '#101014', '#14181f', '#191d24',
+    '#1a1a1a', '#222222', '#262626', '#221a14', '#262016', '#14201e',
+    '#16241c', '#1c1626', '#201420', '#24141a',
+  ],
+};
+let tintSide = null; // 'light' | 'dark' | null = editor closed
+
+const tintInput = (side) => (side === 'light' ? $('#colorLight') : $('#colorDark'));
+
+function applyTint(hex) {
+  const input = tintInput(tintSide);
+  input.value = hex;
+  input.dispatchEvent(new Event('change', { bubbles: true })); // -> saveSettings
+}
+
+function refreshTintEditor() {
+  for (const btn of document.querySelectorAll('.tint-open')) {
+    btn.setAttribute('aria-expanded', String(btn.dataset.side === tintSide));
+  }
+  const editor = $('#tintEditor');
+  editor.hidden = !tintSide;
+  if (!tintSide) return;
+  $('#tintEditorLabel').textContent = tintSide === 'light' ? 'DAY TINT' : 'NIGHT TINT';
+  const current = tintInput(tintSide).value;
+  const box = $('#tintSwatches');
+  box.textContent = '';
+  for (const hex of TINT_PRESETS[tintSide]) {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = hex === current ? 'tint-swatch active' : 'tint-swatch';
+    swatch.style.setProperty('--swatch', hex);
+    swatch.append(document.createElement('i'), hex);
+    swatch.addEventListener('click', () => applyTint(hex));
+    box.append(swatch);
+  }
+  if (document.activeElement !== $('#tintHex')) $('#tintHex').value = current;
+}
+
+for (const btn of document.querySelectorAll('.tint-open')) {
+  btn.addEventListener('click', () => {
+    tintSide = tintSide === btn.dataset.side ? null : btn.dataset.side;
+    refreshTintEditor();
+  });
+}
+$('#tintClose').addEventListener('click', () => {
+  tintSide = null;
+  refreshTintEditor();
+});
+$('#tintCustom').addEventListener('click', () => tintInput(tintSide).click());
+$('#tintHex').addEventListener('change', () => {
+  let hex = $('#tintHex').value.trim().toLowerCase();
+  if (!hex.startsWith('#')) hex = '#' + hex;
+  if (/^#[0-9a-f]{6}$/.test(hex)) applyTint(hex);
+  else $('#tintHex').value = tintInput(tintSide).value; // revert, keep the stored tint
+});
 
 async function loadSettings() {
   const raw = await chrome.storage.sync.get(SQZ.SETTINGS_KEY);
@@ -148,7 +207,7 @@ async function loadSettings() {
   $('#colorDark').value = SQZ.sanitizeColor(s.colorDark, SQZ.DEFAULT_SETTINGS.colorDark);
   renderRules(s.rules);
   applyPageTheme(s.theme);
-  updatePreview();
+  syncTints();
 }
 
 // Our own saves must not re-render the form (that would stomp an edit in
@@ -166,7 +225,7 @@ async function saveSettings() {
     }
   }
   applyPageTheme(settings.theme);
-  updatePreview();
+  syncTints();
   const stamp = echoes.add(settings);
   try {
     await chrome.storage.sync.set({ [SQZ.SETTINGS_KEY]: settings });
@@ -179,7 +238,15 @@ async function saveSettings() {
 
 const form = $('#settingsForm');
 form.addEventListener('change', saveSettings);
-form.addEventListener('input', updatePreview); // live while picking colors
+form.addEventListener('input', syncTints); // live while picking colors
+
+// The giant width numbers select as a block — every focus or click selects
+// the whole number, so typing replaces it outright and no caret ever blinks
+// (the caret is transparent and ::selection inverts the band's ink).
+for (const el of [$('#defaultLeft'), $('#defaultRight')]) {
+  el.addEventListener('focus', () => el.select());
+  el.addEventListener('click', () => el.select());
+}
 
 // New rules start from the current global defaults; nothing is saved until
 // the pattern is committed (blank patterns never reach storage).
@@ -203,10 +270,13 @@ $('#resetColors').addEventListener('click', () => {
 // Chrome has no API for extensions to SET command shortcuts, only to read
 // them — so show the live binding and link to Chrome's editor.
 function renderShortcut(shortcut) {
-  const box = $('#shortcutValue');
+  const box = $('#shortcutKeys');
   box.textContent = '';
   if (!shortcut) {
-    box.textContent = 'Not set';
+    const none = document.createElement('div');
+    none.className = 'keycap-none';
+    none.textContent = 'NOT SET';
+    box.append(none);
     return;
   }
   // Chrome formats shortcuts as "Alt+Shift+S" or, on macOS, as a bare
@@ -215,7 +285,8 @@ function renderShortcut(shortcut) {
     ? shortcut.split('+')
     : (shortcut.match(/[⌘⌥⇧⌃]|[^⌘⌥⇧⌃]+/gu) ?? [shortcut]);
   for (const part of parts) {
-    const key = document.createElement('kbd');
+    const key = document.createElement('div');
+    key.className = part.length > 1 ? 'keycap wide' : 'keycap';
     key.textContent = part;
     box.append(key);
   }
@@ -238,17 +309,28 @@ $('#openIssue').addEventListener('click', () => {
   chrome.tabs.create({ url: 'https://github.com/MarksonChen/pillarbox/issues/new' });
 });
 
+// Web Store review link. REVIEW_URL pins the listing once published; until
+// it is set, the runtime id resolves correctly for store installs.
+const REVIEW_URL = '';
+$('#openReview').addEventListener('click', () => {
+  chrome.tabs.create({
+    url: REVIEW_URL || `https://chromewebstore.google.com/detail/${chrome.runtime.id}/reviews`,
+  });
+});
+
 // Gesture legend: any modifier key means "both sides" (mirrored drag,
-// reset). Show this platform's modifiers as keycaps wherever they appear.
+// reset). Show this platform's modifiers, slash-run style.
 function renderModKeys() {
   const mac = navigator.platform.startsWith('Mac');
-  for (const box of document.querySelectorAll('.modkeys')) {
-    for (const mod of mac ? ['⇧', '⌃', '⌥', '⌘'] : ['Shift', 'Ctrl', 'Alt']) {
-      const key = document.createElement('kbd');
-      key.textContent = mod;
-      box.append(key);
-    }
-  }
+  const run = (mac ? ['⇧', '⌃', '⌥', '⌘'] : ['SHIFT', 'CTRL', 'ALT']).join('/');
+  for (const box of document.querySelectorAll('.modkeys')) box.textContent = run;
+}
+
+// The bottom ticker: one phrase repeated far past the canvas width, twice —
+// the CSS loop slides by exactly one of the two identical halves.
+function renderTicker() {
+  const run = Array(10).fill('ADJUST → IT SAVES → CLOSE THE TAB').join(' → ') + ' → ';
+  for (const half of document.querySelectorAll('.ticker-inner span')) half.textContent = run;
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -257,6 +339,20 @@ chrome.storage.onChanged.addListener((changes, area) => {
   loadSettings();
 });
 
+// Dogfood: options.html loads the real content scripts, so the pillars are
+// live on this page too. Seed the page record on the first visit — panels
+// on at 400×400; index.js picks the write up through storage.onChanged and
+// enables itself. From then on the record is the user's, like on any page:
+// resize, collapse or toggle off here and it sticks.
+async function seedOwnPanels() {
+  const key = SQZ.pageKey(location.href);
+  const existing = await chrome.storage.local.get(key);
+  if (key in existing) return;
+  await chrome.storage.local.set({ [key]: { on: true, left: 400, right: 400, t: Date.now() } });
+}
+
 loadSettings();
 loadShortcut();
 renderModKeys();
+renderTicker();
+seedOwnPanels();
