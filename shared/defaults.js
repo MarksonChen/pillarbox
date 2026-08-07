@@ -13,12 +13,13 @@ SQZ.DEFAULT_SETTINGS = Object.freeze({
   colorLight: '#eef0f3',    // panel color when the light theme is active
   colorDark: '#1d2126',     // panel color when the dark theme is active
   showReadout: false,       // px readout bubble while dragging a handle
-  // Per-URL default widths, first match wins. These two ship as defaults;
+  // Per-URL default widths, first match wins. These three ship as defaults;
   // they are ordinary rules in the options page — edit or remove freely
   // (the first save persists the list wholesale, so removal sticks).
   rules: Object.freeze([
     Object.freeze({ pattern: 'https://www\\.nature\\.com/articles', left: 535, right: 0 }),
     Object.freeze({ pattern: 'https://www\\.zhihu\\.com/question', left: 425, right: 425 }),
+    Object.freeze({ pattern: 'https://www\\.youtube\\.com/watch', left: 285, right: 0 }),
   ]),
 });
 

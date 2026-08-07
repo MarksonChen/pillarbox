@@ -54,9 +54,11 @@ main {
 
 .masthead { margin-top: 6px; }
 .mast-word {
-  /* Optical flush-left: cancel the glyph side bearing, scaled with the
-     type so nothing gets shaved off under a squeeze. */
-  margin-left: calc(-14 * var(--u));
+  /* Flush-left: cancel the glyph's own left side bearing so the ink — not
+     the text box — starts at the page edge. P, B and R all carry the same
+     0.069em stem bearing in this face, and an em value tracks the type on
+     its own, so this holds at every squeeze. */
+  margin-left: -0.069em;
   font-size: calc(330 * var(--u));
   font-weight: 800;
   letter-spacing: -0.07em;
@@ -98,10 +100,13 @@ main {
   line-height: 0.82;
   white-space: nowrap;
 }
-.sec-head:not(.flip) .word { margin-left: calc(-10 * var(--u)); }
+.sec-head:not(.flip) .word { margin-left: -0.069em; }
 /* Solid glyphs bleed off the edge on purpose; an outlined word would get
    its stroke clipped there, so WIDTH sits inside the border instead. */
 .sec-head:not(.flip) .word-outline { margin-left: calc(5 * var(--u)); }
+/* Same on the flip side, where the word is flush right: half of the 4px
+   stroke falls outside the glyph, so TOUCH steps in to keep it whole. */
+.sec-head.flip .word-outline { margin-right: 2px; }
 .word-outline { color: transparent; -webkit-text-stroke: 4px var(--ink); }
 /* Under a heavy squeeze the head stacks: giant word on top, description on
    its own row below (word first in both flip directions). */
@@ -133,9 +138,15 @@ main {
 .width-cell { display: flex; flex-direction: column; align-items: center; }
 .width-input {
   width: 3.2ch;
-  /* The trailing negative letter-spacing pulls the content edge over the
-     last digit; the right padding gives that edge back. */
-  padding: 0 0.07em 0 0;
+  padding: 0;
+  /* The tracking below is negative, so the box the browser sizes to the
+     text ends one letter-space INSIDE the last digit — and a text field
+     clips at that content edge, not at its padding box, so padding cannot
+     buy the room back. An RTL start-indent can: it reserves the space at
+     the line's end, which in RTL is the right. The digits stay an ordinary
+     LTR run, so the number reads, selects and edits exactly as before. */
+  direction: rtl;
+  text-indent: 0.07em;
   border: 0;
   background: transparent;
   color: inherit;

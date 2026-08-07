@@ -1,195 +1,66 @@
 # Pillarbox
 
-A Chrome extension (Manifest V3, vanilla JS, no build step) that squeezes
-page content inward between two empty, resizable sidebars. For pages that
-put their content hard-left, hard-right, or across the full window width.
+A Chrome extension that squeezes a page's content inward between two empty,
+resizable sidebars — for sites that put their text hard-left, hard-right, or
+stretched across the whole window.
 
-- **Click the toolbar icon** (or press `Alt+Shift+S`) to toggle the sidebars
-  on the current site. The page content genuinely **reflows** into the inner
-  region — it is not just covered. If both sidebars are collapsed, the
-  click brings them back to the default widths instead of toggling an
-  invisible state off.
-- **Drag** a sidebar's inner edge to resize it; left and right are
-  independent. Hold **any modifier key** (⇧ ⌃ ⌥ ⌘) while dragging to move
-  both sidebars together by the same amount — press or release the key
-  mid-drag to link/unlink. **Double-click** a sidebar to collapse it; a
-  collapsed side comes back with a double-click on its thin sliver at the
-  screen edge. Modifiers mean "both sides" here too: hold one and
-  double-click a sidebar to restore both to your default widths. A sidebar can go past the middle when the other side is narrow
-  — the only limit is that at least 200px of page always stays visible
-  between them.
-- **Zoom-stable**: sidebar widths are kept in pixels at 100% page zoom, so
-  a sidebar stays the same size on screen at any zoom level — zooming
-  changes the size of the page's text, not the width of the pillars.
-- **Per-URL default widths**: rules map a URL regex to its own default
-  pair. Two ship out of the box — `https://www\.nature\.com/articles` →
-  535 × 0 and `https://www\.zhihu\.com/question` → 425 × 425 — and are
-  ordinary rules in the options page: edit or remove them freely (the
-  first save persists your list wholesale, so removal sticks). The first
-  matching rule decides what a page gets on its first enable and what the
-  double-click reset returns to; pages you have already resized keep
-  their saved widths. Patterns are tested against the URL without its
-  `#hash`; invalid regexes are flagged in the options page and skipped.
-- **Per-page memory with auto-restore**: each exact URL (path + query; the
-  hash is ignored) remembers whether the sidebars are on and how wide they
-  are, and re-applies that on every reload and future visit until you toggle
-  them off. Same-document (SPA) navigations switch records live — leaving a
-  remembered page closes the sidebars, coming back reopens them. Usually
-  only a few pages on a big site need squeezing, so memory is deliberately
-  narrow. Memory is automatic and capped at the 1000 most recently used
-  pages (older records are silently pruned).
-- Full-width `position:fixed` bars (navbars, cookie banners, fixed app
-  shells) are **also squeezed**, best-effort and always on; sticky elements
-  reflow on their own. So are app shells pinned to the viewport with
-  `width:100vw` (chatgpt.com, notion.so) and full-bleed bars that break out
-  with viewport-relative negative margins (reddit's header).
-- **Options page**: live preview, theme (Auto/Light/Dark), sidebar colors
-  for the light and dark themes, default widths, per-URL width rules (a
-  reorderable editor — first match wins — with live regex validation), the
-  pixel readout while resizing (off by default), a gesture reference, the
-  current keyboard shortcut with a jump to Chrome's shortcut editor
-  (Chrome offers no API to set shortcuts from an extension page), and a
-  feedback button that opens the issue tracker.
+The page genuinely **reflows** into the narrower column. The sidebars are not
+an overlay sitting on top of the text.
 
-## Install (any Chrome)
+## Install
 
-1. Open `chrome://extensions`, enable **Developer mode** (top right).
-2. **Load unpacked** → select this folder.
-3. Pin the icon; click it on any page.
+1. Open `chrome://extensions` and turn on **Developer mode** (top right).
+2. Click **Load unpacked** and pick this folder.
+3. Pin the icon, then click it on any page.
 
-## How it works
+## Use
 
-- **Reflow**: inline `margin-left/right` + `width:auto` are set on `<html>`
-  through the CSSOM with `!important`. That reflows all normal-flow and
-  sticky content, wins over the page's own CSS (even inline `!important`),
-  and cannot be blocked by page CSP. A `MutationObserver` re-asserts the
-  values if the page rewrites its own style attribute.
-- **Panels**: one `<pillarbox-host>` element with an open shadow root
-  holds both panels, so page CSS can't restyle them.
-- **Fixed bars & app shells**: `position:fixed` boxes are laid out against
-  the viewport, and `position:absolute` boxes with no positioned ancestor
-  (SPA app shells like claude.ai's `absolute inset-0` root) are anchored to
-  the initial containing block — both ignore the html margins. Elements of
-  either kind that span ≥ 90% of the viewport and visibly escape the squeeze
-  (absolute ones additionally must have no positioned/transformed ancestor)
-  get inline `left/right` insets to match. A
-  `MutationObserver` catches bars added later or turned fixed by a class
-  change; everything is restored exactly on toggle-off. Squeezing the shell
-  also narrows any iframe inside it, so framed content (e.g. artifact
-  viewers) reflows like a window resize.
-- **Viewport-unit shells**: normal-flow boxes can escape too, by being
-  sized with viewport units (`width:100vw` app shells — chatgpt.com,
-  notion.so) or pulled out by the full-bleed idiom
-  `margin-inline: calc(0px - (50vw - 50%))` (reddit's header). Escaping
-  flow boxes get `width:auto` (and their negative margins zeroed) so they
-  track their squeezed parent again. Each adoption is verified and undone
-  if it changed nothing (a table sized by unbreakable content can't be
-  fixed by width overrides). The panel host also pins
-  `visibility:visible !important` inline, because some sites hide all
-  undefined custom elements as an anti-flicker guard (reddit's
-  `:not(:defined){visibility:hidden}`).
-- **Page zoom**: zoom scales the CSS px unit itself, so a stored width
-  applied verbatim would grow on screen as the user zooms in — squeezing
-  the content column a second time on top of the zoom. Widths are stored as
-  px at 100% zoom and divided by the tab's zoom factor on the way into the
-  page (multiplied back on the way out of a drag); every clamp, panel and
-  inset in between stays in ordinary CSS px.
+| To do this | Do that |
+| --- | --- |
+| Turn the sidebars on or off | Click the toolbar icon, or press `Alt+Shift+S` |
+| Resize one side | Drag its inner edge |
+| Resize both at once | Hold any modifier key (⇧ ⌃ ⌥ ⌘) and drag |
+| Collapse one side | Double-click it |
+| Bring a collapsed side back | Double-click its sliver at the screen edge |
+| Return to your default widths | Hold a modifier and double-click a sidebar |
 
-  Learning the factor is latency-critical: the authoritative value lives in
-  `chrome.tabs` (worker round-trip — the page would repaint wrong, then
-  snap). Instead the factor is *predicted* in-page: `devicePixelRatio` is
-  zoom × display scale and has already moved when the resize event fires,
-  inside the rendering update that paints the first zoomed frame — so
-  dividing the old dpr out of the new one converts the last authoritative
-  (zoom, dpr) pair into the exact new factor, applied before that first
-  paint. Zooming is flash-free by construction. The service worker then
-  merely confirms (`tabs.getZoom` on request, `tabs.onZoomChange` as a
-  push — neither needs a permission) and only ever corrects the one case
-  the ratio misreads: a cross-display move, where dpr moved but zoom
-  didn't. Confirmed non-100% factors are cached per origin under
-  `zoom:<origin>` in `chrome.storage.local` — Chrome remembers zoom per
-  origin, so the hint rides the boot-time storage read and a zoomed page
-  auto-restores at exact widths with no worker on the boot path either.
-- **Surviving extension reloads**: reloading or updating the extension
-  orphans the content script in every open tab — `chrome.runtime.id` goes
-  undefined and each `chrome.*` call throws "Extension context invalidated".
-  On its next wake-up (SPA navigation, resize, storage write, or a style
-  re-assertion), an orphaned script restores the page and detaches
-  completely instead of erroring or fighting the freshly injected script
-  over the html margins; the next toolbar click injects a new script that
-  takes over from storage.
+One sidebar can go past the middle when the other is narrow. The only limit is
+that 200px of page always stays visible between them.
 
-## Known limitations (by design)
+## What it remembers
 
-- Media queries don't re-evaluate — the site keeps its desktop layout, just
-  narrower (that's the point). Pages with a hard `min-width` show a
-  horizontal scrollbar because the content area is genuinely narrower.
-- `100vw` sections narrower than 90% of the viewport, and boxes that are
-  wide because of unbreakable content (code blocks, tables), still extend
-  under the (opaque) panels.
-- Fixed elements narrower than 90% of the viewport (chat buttons, side
-  drawers) are not moved and may sit partly under a panel.
-- Fixed bars centered with `left:50% + translateX(-50%)` can end up shifted.
-- Apps that measure `window.innerWidth` in JavaScript and set pixel sizes
-  from it (some editors / canvas UIs) lay themselves out to the real
-  viewport; no in-page technique can change what `innerWidth` reports.
-- Top frame only; fixed elements inside iframes are untouched.
-- Pages that differ only in their `#hash` share one record; pages that
-  differ in query string get separate records.
-- Running on `file://` pages requires "Allow access to file URLs" in
+Each page — the exact URL, ignoring `#anchors` — remembers whether the
+sidebars are on and how wide they are, and restores that on every reload and
+future visit until you toggle it off. Nothing to save; it just sticks.
+
+Sidebar widths are also zoom-stable: a sidebar stays the same size on screen
+at any zoom level, so zooming resizes the page's text, not your pillars.
+
+## Options
+
+Right-click the icon → **Options**. You can set the default widths, the theme
+(Auto / Light / Dark) and the sidebar colors, turn on a pixel readout while
+dragging, and change the keyboard shortcut.
+
+You can also write **per-URL rules**: a URL pattern gets its own default
+widths, which apply the first time you enable that page and whenever you reset
+it. Three ship out of the box (nature.com articles, zhihu questions, YouTube
+watch pages) and are ordinary rules — edit or delete them freely.
+
+## Good to know
+
+- The site keeps its desktop layout, just narrower — that is the point. A page
+  with a hard minimum width will show a horizontal scrollbar instead.
+- Wide, unbreakable content (code blocks, wide tables) can still run under a
+  sidebar.
+- Small fixed elements — chat buttons, side drawers — are left where they are
+  and may sit partly under a sidebar.
+- Fullscreen video is unaffected, and printing temporarily un-squeezes the page
+  so printouts come out clean.
+- Running on `file://` pages needs "Allow access to file URLs" in
   `chrome://extensions`.
-- Fullscreen video/elements render in the browser's top layer and are
-  unaffected. Printing temporarily un-squeezes the page so printouts are
-  clean.
 
 ## Development
 
-```
-manifest.json          extension wiring
-background.js          service worker: icon click -> toggle message (+ inject fallback), zoom relay
-shared/defaults.js     constants shared by all contexts
-content/squeeze.js     html-margin reflow + style watcher
-content/fixed-bars.js  escaping-element manager (fixed bars, vw-unit shells)
-content/panels.js      shadow-DOM panels + drag handles
-content/index.js       per-page state machine, storage, lifecycle
-options/               options page
-tools/make_icons.sh    regenerate icons/ from source art (macOS sips)
-test/                  test pages + end-to-end script
-```
-
-State: `chrome.storage.sync['settings']` holds `{theme, defaultLeft,
-defaultRight, colorLight, colorDark, showReadout, rules}` (`rules` is an
-ordered list of `{pattern, left, right}` — first matching regex wins;
-two rules ship as defaults until the first options save);
-`chrome.storage.local['page:<origin+path+query>']` holds `{on, left, right, t}`
-per page (widths in px at 100% zoom; `t` is the last-used timestamp driving
-the 1000-page LRU cap); `chrome.storage.local['zoom:<origin>']` caches an
-origin's confirmed zoom factor while it sits ≠ 100% (removed at 100%).
-
-### Testing
-
-Manual: serve the test pages and load the extension unpacked, then click the
-icon on the page and walk the checklist in `test/page.html` (fixed navbar
-edges move inward, sticky reflows, FAB stays put, late/morphing bars get
-adopted, print preview is clean):
-
-```sh
-python3 -m http.server 8080 --directory test
-open http://localhost:8080/page.html
-```
-
-Automated (needs Node ≥ 22 and Chrome for Testing — branded Chrome ≥ 137
-ignores `--load-extension`):
-
-```sh
-npx @puppeteer/browsers install chrome@stable --path .cft   # once, ~150 MB
-node test/e2e.mjs
-```
-
-The script launches a throwaway headless profile, toggles via the real
-message path, and asserts reflow, fixed-bar insetting, per-page auto-restore
-after reload, zoom-stable widths (correct in the first zoomed frame, hint
-persistence, zoomed page load), per-URL width rules (first-enable widths,
-rule-aware reset, options editor round-trip), live settings flips, theming,
-and survival of a `style-src 'none'` CSP. It writes screenshots to `$SHOT_DIR` (default: OS
-temp dir).
+See **[DEVELOPERS.md](DEVELOPERS.md)** for the architecture, how the squeeze is
+actually implemented, the storage schema, and how to run the tests.

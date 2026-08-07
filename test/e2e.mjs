@@ -681,9 +681,9 @@ async function main() {
         && optState.colorDark === '#1d2126' && optState.pageTheme === 'light',
       JSON.stringify(optState));
     // Storage holds no `rules` key at this point, so the SHIPPED defaults
-    // must be showing: nature.com/articles 535x0 first, zhihu second.
-    check('options: shipped default rules rendered (nature 535x0, zhihu)',
-      optState.ruleRows === 2 && optState.rule0 === 'https://www\\.nature\\.com/articles'
+    // must be showing: nature.com/articles 535x0 first, then zhihu, youtube.
+    check('options: shipped default rules rendered (nature 535x0, zhihu, youtube)',
+      optState.ruleRows === 3 && optState.rule0 === 'https://www\\.nature\\.com/articles'
         && optState.rule0Left === '535' && optState.rule0Right === '0',
       JSON.stringify({ rows: optState.ruleRows, rule0: optState.rule0 }));
 
