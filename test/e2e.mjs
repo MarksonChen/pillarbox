@@ -385,17 +385,27 @@ async function main() {
     await until(async () => (await evalIn(page, SNAP)).ml === '320px', 3000, 'dblclick restore');
     check('dblclick collapses and restores the left side', true);
 
+    // Every clamp below is measured against the LAYOUT width, which is the
+    // window width minus a classic scrollbar — and whether this Chrome gives
+    // the page a classic (15px) or an overlay (0px) scrollbar varies by
+    // version and platform. Read it from the page rather than assuming it,
+    // or the expected widths are off by the scrollbar on half the machines.
+    const LW = (await evalIn(page, SNAP)).cw;
+    const FAR = LW - 60; // a drag target well past every clamp
+
     // Min-gap clamp: with the right side at 200 the left handle can pass the
-    // middle, but must stop at layoutWidth(1425) - MIN_GAP - 200 = 1025.
+    // middle, but must stop at layoutWidth - MIN_GAP - 200.
+    const capLeft = LW - 200 - 200;
     await mouse('mousePressed', 320, 450, 1);
-    for (const x of [340, 600, 900, 1200, 1380]) await mouse('mouseMoved', x, 450);
-    await mouse('mouseReleased', 1380, 450, 1);
+    for (const x of [340, 600, 900, 1200, FAR]) await mouse('mouseMoved', x, 450);
+    await mouse('mouseReleased', FAR, 450, 1);
     s = await until(async () => {
       const v = await evalIn(page, SNAP);
-      return v.ml === '1025px' ? v : null;
+      return v.ml === `${capLeft}px` ? v : null;
     }, 3000, 'min-gap clamp during drag');
-    check('one side passes the middle but a 200px page gap survives', true, `ml=${s.ml}`);
-    await mouse('mousePressed', 1025, 450, 1);
+    check('one side passes the middle but a 200px page gap survives', true,
+      `ml=${s.ml} (layout width ${LW})`);
+    await mouse('mousePressed', capLeft, 450, 1);
     for (const x of [1000, 700, 400, 320]) await mouse('mouseMoved', x, 450);
     await mouse('mouseReleased', 320, 450, 1);
     await until(async () => (await evalIn(page, SNAP)).ml === '320px', 3000, 'drag back to 320');
@@ -416,22 +426,29 @@ async function main() {
       `ml=${s.ml} mr=${s.mr}`);
 
     // Mirrored min-gap clamp: both sides must stop TOGETHER when only the
-    // 200px gap is left. offset = 300-380 = -80, budget = 1425-200 = 1225,
-    // so left stops at floor((1225+80)/2) = 652 and right at 572.
+    // 200px gap is left. offset = 300 - 380 = -80 and budget = LW - MIN_GAP,
+    // so the near side stops at floor((budget + 80) / 2) and the far side 80
+    // behind it.
+    const mirrorLeft = Math.floor((LW - 200 + 80) / 2);
+    const mirrorRight = mirrorLeft - 80;
     await mouse('mousePressed', 380, 450, 1);
-    for (const x of [400, 800, 1380]) await mouse('mouseMoved', x, 450, 0, SHIFT);
-    await mouse('mouseReleased', 1380, 450, 1);
+    for (const x of [400, 800, FAR]) await mouse('mouseMoved', x, 450, 0, SHIFT);
+    await mouse('mouseReleased', FAR, 450, 1);
     s = await until(async () => {
       const v = await evalIn(page, SNAP);
-      return v.ml === '652px' && v.mr === '572px' ? v : null;
+      return v.ml === `${mirrorLeft}px` && v.mr === `${mirrorRight}px` ? v : null;
     }, 3000, 'mirrored min-gap clamp');
     check('mirrored drag stops both sides at the min gap', true, `ml=${s.ml} mr=${s.mr}`);
 
-    // Mirror works from the right handle too; shift-drag it (at 1425-572 =
-    // 853) out to 1225: right 572 -> 200, left follows 652 -> 280.
-    await mouse('mousePressed', 853, 450, 1);
-    for (const x of [860, 1000, 1225]) await mouse('mouseMoved', x, 450, 0, SHIFT);
-    await mouse('mouseReleased', 1225, 450, 1);
+    // Mirror works from the right handle too; shift-drag it (at LW minus the
+    // right width) out to LW - 200: right lands on 200 and left follows to
+    // 280, keeping the 80px offset.
+    const rightHandle = LW - mirrorRight;
+    await mouse('mousePressed', rightHandle, 450, 1);
+    for (const x of [rightHandle + 7, rightHandle + 150, LW - 200]) {
+      await mouse('mouseMoved', x, 450, 0, SHIFT);
+    }
+    await mouse('mouseReleased', LW - 200, 450, 1);
     s = await until(async () => {
       const v = await evalIn(page, SNAP);
       return v.ml === '280px' && v.mr === '200px' ? v : null;
@@ -471,8 +488,8 @@ async function main() {
     await mouse('mousePressed', 100, 450, 1); await mouse('mouseReleased', 100, 450, 1);
     await mouse('mousePressed', 100, 450, 2); await mouse('mouseReleased', 100, 450, 2);
     await until(async () => (await evalIn(page, SNAP)).ml === '0px', 3000, 'left collapsed');
-    await mouse('mousePressed', 1300, 450, 1); await mouse('mouseReleased', 1300, 450, 1);
-    await mouse('mousePressed', 1300, 450, 2); await mouse('mouseReleased', 1300, 450, 2);
+    await mouse('mousePressed', LW - 100, 450, 1); await mouse('mouseReleased', LW - 100, 450, 1);
+    await mouse('mousePressed', LW - 100, 450, 2); await mouse('mouseReleased', LW - 100, 450, 2);
     await until(async () => {
       const v = await evalIn(page, SNAP);
       return v.ml === '0px' && v.mr === '0px';
