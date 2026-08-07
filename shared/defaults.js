@@ -8,8 +8,8 @@ var SQZ = globalThis.SQZ ??= {};
 
 SQZ.DEFAULT_SETTINGS = Object.freeze({
   theme: 'auto',            // 'auto' | 'light' | 'dark'
-  defaultLeft: 200,         // px, used the first time a page is enabled
-  defaultRight: 200,        // px
+  defaultLeft: 300,         // px, used the first time a page is enabled
+  defaultRight: 300,        // px
   colorLight: '#eef0f3',    // panel color when the light theme is active
   colorDark: '#1d2126',     // panel color when the dark theme is active
   showReadout: false,       // px readout bubble while dragging a handle

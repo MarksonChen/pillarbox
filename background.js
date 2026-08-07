@@ -64,15 +64,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // keep the channel open for the async response
 });
 
+// One pending clear per tab, tracked like pruneTimer above: without this an
+// earlier click's timer erases the ✕ a later click just painted.
+const badgeTimers = new Map();
+
+function clearBadge(tabId) {
+  clearTimeout(badgeTimers.get(tabId));
+  badgeTimers.delete(tabId);
+  chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
+}
+
 function flashBadge(tabId) {
   // Signal "can't run here" (chrome://, Web Store, PDF viewer, ...).
   chrome.action.setBadgeBackgroundColor({ tabId, color: '#c0392b' })
     .then(() => chrome.action.setBadgeText({ tabId, text: '✕' }))
     .catch(() => {});
   // The worker outlives the click event long enough for a short timer.
-  setTimeout(() => {
-    chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
-  }, 1600);
+  clearTimeout(badgeTimers.get(tabId));
+  badgeTimers.set(tabId, setTimeout(() => clearBadge(tabId), 1600));
 }
 
 chrome.action.onClicked.addListener(async (tab) => {
@@ -80,7 +89,7 @@ chrome.action.onClicked.addListener(async (tab) => {
   if (tabId === undefined || tabId === chrome.tabs.TAB_ID_NONE) return;
   // A ✕ from an earlier click sticks around if the worker was killed before
   // flashBadge's clear timer fired; wipe the slate on every click.
-  chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
+  clearBadge(tabId);
   const toggle = () => chrome.tabs.sendMessage(tabId, { type: SQZ.MSG.TOGGLE });
   try {
     await toggle();

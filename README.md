@@ -18,6 +18,7 @@ an overlay sitting on top of the text.
 | To do this | Do that |
 | --- | --- |
 | Turn the sidebars on or off | Click the toolbar icon, or press `Alt+Shift+S` |
+| Bring both collapsed sides back | Click the toolbar icon (it revives rather than toggling off) |
 | Resize one side | Drag its inner edge |
 | Resize both at once | Hold any modifier key (⇧ ⌃ ⌥ ⌘) and drag |
 | Collapse one side | Double-click it |

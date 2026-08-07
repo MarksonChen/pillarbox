@@ -253,6 +253,12 @@ if (!SQZ.booted) {
       };
     }
 
+    // The panels' own fallback when a side has never been open on this page.
+    // Global, not defaultWidths(): see the note on `defaults` in panels.js.
+    function defaultsFromSettings() {
+      return { left: settings.defaultLeft, right: settings.defaultRight };
+    }
+
     function startFixedBars() {
       const { left, right } = effWidths();
       SQZ.fixedBars.start(left, right, (el) => el.localName === SQZ.panels.HOST_TAG);
@@ -280,6 +286,7 @@ if (!SQZ.booted) {
         left,
         right,
         appearance: appearanceFromSettings(),
+        defaults: defaultsFromSettings(),
         onDragStart,
         onDrag,
         onDragEnd,
@@ -353,12 +360,15 @@ if (!SQZ.booted) {
         if (!busy) {
           busy = true;
           try {
-            if (phase === 'active' && !rec.left && !rec.right) {
+            const dw = defaultWidths();
+            if (phase === 'active' && !rec.left && !rec.right && (dw.left || dw.right)) {
               // Both sides collapsed: the page already looks un-squeezed,
               // so a plain toggle-off would be invisible and the button
               // would feel dead. Make the click mean "bring the sidebars
-              // back" — this page's defaults, rule or global.
-              await persist({ on: true, ...defaultWidths() });
+              // back" — this page's defaults, rule or global. Unless those
+              // are 0/0 as well: reviving to nothing would leave the button
+              // with no reachable off state at all, so fall through instead.
+              await persist({ on: true, ...dw });
               if (idle()) applyWidthsToPage();
             } else if (phase === 'active') {
               disable();
@@ -390,7 +400,7 @@ if (!SQZ.booted) {
     async function persist(patch) {
       recEpoch++;
       rec = {
-        ...(rec ?? { on: false, ...defaultWidths() }),
+        ...rec, // never null here: every caller is past enable() or holds one
         ...patch,
         t: Date.now(), // LRU timestamp; the service worker prunes the oldest
       };
@@ -438,6 +448,8 @@ if (!SQZ.booted) {
     function applySettings() {
       if (phase !== 'active') return;
       SQZ.panels.setAppearance(appearanceFromSettings());
+      const dw = defaultsFromSettings();
+      SQZ.panels.setDefaults(dw.left, dw.right);
     }
 
     function onDragStart() {

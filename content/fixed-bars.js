@@ -43,20 +43,30 @@ SQZ.fixedBars ??= (() => {
     return position === 'fixed' || position === 'absolute' ? 'inset' : 'flow';
   }
 
-  // Absolute boxes must be anchored to the initial containing block to be
-  // adoptable. Anything below a positioned/transformed ancestor moves with
-  // that ancestor — insetting it too would compound the squeeze (nested
-  // app-shell layers would shrink the content once per level).
-  function anchoredToViewport(el) {
+  // transform / filter / perspective / will-change / contain make an element
+  // the containing block for FIXED descendants as well as absolute ones —
+  // that is what can silently re-anchor a bar we already adopted. Only
+  // absolute boxes are additionally captured by a merely positioned ancestor.
+  function makesContainingBlock(cs, position) {
+    return cs.transform !== 'none'
+      || cs.filter !== 'none'
+      || cs.perspective !== 'none'
+      || /transform|perspective|filter/.test(cs.willChange || '')
+      || /layout|paint|strict|content/.test(cs.contain || '')
+      || (position === 'absolute' && cs.position !== 'static');
+  }
+
+  // Inset boxes must resolve against the initial containing block to be
+  // adoptable. Below such an ancestor the box already moves with it, and our
+  // viewport-relative left/right would be wrong twice over: an absolute box
+  // would compound the squeeze (nested app-shell layers shrinking the content
+  // once per level), and a fixed box would collapse — viewport insets applied
+  // to a box laid out against a much narrower ancestor leave no width at all.
+  function anchoredToViewport(el, position) {
     for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
       let cs;
       try { cs = getComputedStyle(a); } catch { return false; }
-      if (cs.position !== 'static'
-          || cs.transform !== 'none'
-          || cs.filter !== 'none'
-          || cs.perspective !== 'none'
-          || /transform|perspective|filter/.test(cs.willChange || '')
-          || /layout|paint|strict|content/.test(cs.contain || '')) return false;
+      if (makesContainingBlock(cs, position)) return false;
     }
     return true;
   }
@@ -68,9 +78,7 @@ SQZ.fixedBars ??= (() => {
   // scan — never trips the escape test). Narrower fixed widgets (chat
   // buttons, side drawers) are left alone and sit under the opaque panels.
   function classify(el) {
-    if (el.nodeType !== Node.ELEMENT_NODE
-        || el === document.documentElement
-        || excluded(el)) return null;
+    if (el === document.documentElement || excluded(el)) return null;
     const vw = SQZ.viewportWidth();
     const rect = el.getBoundingClientRect();
     if (rect.width < vw * FULL_WIDTH_RATIO || !escapes(rect, vw)) return null;
@@ -80,8 +88,14 @@ SQZ.fixedBars ??= (() => {
     // fixed boxes ignore the html margins, insetting it is the correct
     // single squeeze, not a double one.
     if (modeOf(cs.position) === 'inset') {
-      if (cs.position === 'absolute' && !anchoredToViewport(el)) return null;
-      return { mode: 'inset' };
+      if (!anchoredToViewport(el, cs.position)) return null;
+      // A viewport-sized min-width outlives our left/right: the box keeps its
+      // full width and merely shifts right by the left inset, tail off the
+      // screen. Defuse it exactly as the flow branch does below.
+      const want = parseFloat(cs.minWidth) >= vw * FULL_WIDTH_RATIO
+        ? { 'min-width': '0px' }
+        : {};
+      return { mode: 'inset', want };
     }
     // Normal flow. Width overrides only make sense on HTML block-level boxes.
     if (!(el instanceof HTMLElement) || cs.display === 'inline') return null;
@@ -102,7 +116,7 @@ SQZ.fixedBars ??= (() => {
 
   function desired(entry) {
     const base = entry.mode === 'inset'
-      ? { left: widths.left + 'px', right: widths.right + 'px', width: 'auto' }
+      ? { left: widths.left + 'px', right: widths.right + 'px', width: 'auto', ...entry.want }
       : entry.want;
     return { ...base, [MARKER]: '1' };
   }
@@ -182,22 +196,25 @@ SQZ.fixedBars ??= (() => {
     }
   }
 
-  // A class/style change anywhere can turn an element into the containing
-  // block (positioned/transformed) of a managed absolute box. Its insets
-  // would then resolve against that ancestor — which the html margins
-  // already squeeze — and compound. Release such boxes; classify() refuses
-  // non-anchored absolutes, so nothing re-adopts them.
+  // A class/style change anywhere can turn an ancestor into the containing
+  // block of a managed inset box — and for a FIXED box a bare transform is
+  // enough, so this catches the GPU-promoted wrapper and the blurred-backdrop
+  // modal as well as the positioned one. Left adopted, an absolute box would
+  // compound the squeeze and a fixed box would collapse to width 0 (viewport
+  // insets against a much narrower ancestor). Release both: the ancestor is
+  // itself squeezed, so the box lands squeezed exactly once, and classify()
+  // refuses non-anchored boxes so nothing re-adopts them.
   function recheckAnchors(changedEls) {
     for (const [el, entry] of managed) {
       if (entry.mode !== 'inset') continue;
       let pos = null;
       try { pos = getComputedStyle(el).position; } catch {}
-      if (pos !== 'absolute') continue;
+      if (pos !== 'absolute' && pos !== 'fixed') continue;
       let underChanged = false;
       for (const changed of changedEls) {
         if (changed !== el && changed.contains(el)) { underChanged = true; break; }
       }
-      if (underChanged && !anchoredToViewport(el)) release(el);
+      if (underChanged && !anchoredToViewport(el, pos)) release(el);
     }
   }
 

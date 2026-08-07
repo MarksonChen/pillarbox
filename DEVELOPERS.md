@@ -179,9 +179,10 @@ the OS temp dir).
 
 ## Icons
 
-`tools/icon-source.png` is the master art (640×640, black on transparent), kept
-outside `icons/` so it is not shipped in the packaged extension. Regenerate the
-four sizes with:
+`tools/icon-source.png` is the master art — square, black on transparent — kept
+in `tools/` rather than `icons/` so it reads as build input rather than a
+shipped asset (nothing excludes it from a zip; leave it out when packaging).
+Regenerate the four sizes with:
 
 ```sh
 tools/make_icons.sh tools/icon-source.png

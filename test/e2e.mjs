@@ -283,27 +283,37 @@ async function main() {
     const on = await toggleViaWorker(`${BASE}/page.html`);
     check('toggle reports on:true', on && on.on === true, JSON.stringify(on));
 
+    // This profile has never saved settings, so the first enable lands on the
+    // SHIPPED defaults. Read them from the extension rather than hardcoding:
+    // they are a product decision that moves independently of the drag
+    // choreography further down.
+    const DEF = await evalIn(sw,
+      '({ l: SQZ.DEFAULT_SETTINGS.defaultLeft, r: SQZ.DEFAULT_SETTINGS.defaultRight })');
+    const inner = (v) => v.cw - DEF.l - DEF.r;
+
     let s = await until(async () => {
       const v = await evalIn(page, SNAP);
-      return v.ml === '200px' && v.nav && near(v.nav.left, 200) ? v : null;
+      return v.ml === `${DEF.l}px` && v.nav && near(v.nav.left, DEF.l) ? v : null;
     }, 4000, 'squeeze applied incl. navbar');
-    check('html margins 200px !important', s.ml === '200px' && s.mr === '200px' && s.mlPrio === 'important',
+    check(`html margins ${DEF.l}/${DEF.r}px !important (the shipped defaults)`,
+      s.ml === `${DEF.l}px` && s.mr === `${DEF.r}px` && s.mlPrio === 'important',
       `ml=${s.ml} mr=${s.mr} prio=${s.mlPrio}`);
     check('panels host mounted', s.host);
-    check('fixed navbar inset (left=200, width=vw-400)',
-      near(s.nav.left, 200) && near(s.nav.width, s.cw - 400), JSON.stringify(s.nav));
+    check('fixed navbar inset to the default widths',
+      near(s.nav.left, DEF.l) && near(s.nav.width, inner(s)), JSON.stringify(s.nav));
     check('sticky subheader reflowed by margins alone',
-      near(s.sticky.left, 200) && near(s.sticky.width, s.cw - 400), JSON.stringify(s.sticky));
+      near(s.sticky.left, DEF.l) && near(s.sticky.width, inner(s)), JSON.stringify(s.sticky));
     check('partial-width fixed FAB untouched', near(s.fab.right, base.fab.right), JSON.stringify(s.fab));
 
     // Late-added fixed bar (childList path) + class-morphing bar (attribute path).
     await evalIn(page, `document.getElementById('addBar').click(); document.getElementById('morphNow').click(); true`);
     s = await until(async () => {
       const v = await evalIn(page, SNAP);
-      return v.late && near(v.late.left, 200) && v.morph && near(v.morph.left, 200) ? v : null;
+      return v.late && near(v.late.left, DEF.l) && v.morph && near(v.morph.left, DEF.l) ? v : null;
     }, 4000, 'late + morphed bars inset');
-    check('late-added fixed bar inset', near(s.late.left, 200) && near(s.late.width, s.cw - 400), JSON.stringify(s.late));
-    check('class-morphed fixed bar inset', near(s.morph.left, 200), JSON.stringify(s.morph));
+    check('late-added fixed bar inset',
+      near(s.late.left, DEF.l) && near(s.late.width, inner(s)), JSON.stringify(s.late));
+    check('class-morphed fixed bar inset', near(s.morph.left, DEF.l), JSON.stringify(s.morph));
 
     const settingsSet = (obj) => evalIn(sw,
       `chrome.storage.sync.set({ settings: ${JSON.stringify(obj)} })`);
@@ -337,6 +347,36 @@ async function main() {
       }
     };
     await screenshot(page, 'squeeze-on.png');
+
+    // Anchor loss, fixed edition. transform/filter/will-change/contain make
+    // an ancestor the containing block for FIXED descendants too, not just
+    // absolute ones, and our viewport insets would then resolve against that
+    // (already squeezed) box and collapse the bar to nothing. It must be
+    // released, and land squeezed exactly once via the ancestor.
+    await evalIn(page, `document.body.style.transform = 'translateZ(0)'; true`);
+    const navFreed = await until(async () => {
+      const v = await evalIn(page, `(() => {
+        const el = document.getElementById('navbar');
+        const r = el.getBoundingClientRect();
+        return {
+          inlineLeft: el.style.left,
+          marker: el.style.getPropertyValue('--pillarbox'),
+          left: r.left, width: r.width,
+        };
+      })()`);
+      return v.inlineLeft === '' && v.marker === '' ? v : null;
+    }, 4000, 'fixed bar released after an ancestor became its containing block');
+    check('fixed bar released when an ancestor becomes its containing block',
+      near(navFreed.left, DEF.l) && near(navFreed.width, inner(base)),
+      JSON.stringify(navFreed));
+    // The reload below rebuilds the document, dropping the transform with it.
+
+    // Everything from here on is drag choreography at fixed coordinates, so
+    // pin the record to a known 200/200 baseline — otherwise every expected
+    // width below moves whenever the shipped defaults do. The reload that
+    // follows applies it, and doubles as the auto-restore check.
+    await evalIn(sw, `chrome.storage.local.set({ ${JSON.stringify(PAGE_KEY)}:`
+      + ` { on: true, left: 200, right: 200, t: Date.now() } })`);
 
     // Auto-restore after reload. Stamp the old document first so the poll
     // can't be satisfied by the pre-reload page.
@@ -384,6 +424,22 @@ async function main() {
     await mouse('mousePressed', 2, 450, 2); await mouse('mouseReleased', 2, 450, 2);
     await until(async () => (await evalIn(page, SNAP)).ml === '320px', 3000, 'dblclick restore');
     check('dblclick collapses and restores the left side', true);
+
+    // A drag can start on the SECOND press of a double-click — Chrome's
+    // dblclick slop is wider than DRAG_THRESHOLD — and the dblclick that
+    // follows must not undo the resize the user just made.
+    await mouse('mousePressed', 320, 450, 1); await mouse('mouseReleased', 320, 450, 1);
+    await mouse('mousePressed', 321, 450, 2);
+    for (const x of [330, 380, 420]) await mouse('mouseMoved', x, 450);
+    await mouse('mouseReleased', 420, 450, 2);
+    await sleep(400); // let any dblclick land before believing the width
+    s = await evalIn(page, SNAP);
+    check('a drag on the second click of a pair is not undone by the dblclick',
+      s.ml === '420px', `ml=${s.ml} (0px = the dblclick collapsed it)`);
+    await mouse('mousePressed', 420, 450, 1);
+    for (const x of [400, 360, 320]) await mouse('mouseMoved', x, 450);
+    await mouse('mouseReleased', 320, 450, 1);
+    await until(async () => (await evalIn(page, SNAP)).ml === '320px', 3000, 'back to 320');
 
     // Every clamp below is measured against the LAYOUT width, which is the
     // window width minus a classic scrollbar — and whether this Chrome gives
@@ -673,6 +729,35 @@ async function main() {
     }, 3000, 'modifier dblclick reset returns to rule widths');
     check('modifier + dblclick reset restores the rule defaults on a matching page', true,
       `ml=${rs.ml} mr=${rs.mr}`);
+    // A rule with a zero side mounts that side collapsed, so the panels never
+    // record a width for it. The dblclick that reopens it has to fall back to
+    // the user's CONFIGURED default — falling back to the rule would reopen it
+    // at 0 and leave the only gesture that can reopen it doing nothing.
+    await settingsSet({
+      theme: 'light', defaultLeft: 260, defaultRight: 260,
+      rules: [{ pattern: 'zeroside=1', left: 0, right: 500 }],
+    });
+    const zero = await openPage(`${BASE}/page.html?zeroside=1`);
+    await sleep(300);
+    await toggleViaWorker(`${BASE}/page.html?zeroside=1`);
+    await until(async () => {
+      const v = await evalIn(zero, SNAP);
+      return v.ml === '0px' && v.mr === '500px';
+    }, 4000, 'zero-side rule applied on first enable');
+    await until(() => evalIn(zero,
+      `getComputedStyle(document.querySelector('pillarbox-host').shadowRoot`
+      + `.querySelector('.panel.right')).transform === 'none'`), 3000, 'zero-side panels settled');
+    // Double-click the sliver at the left screen edge — at width 0 the handle
+    // straddling the edge is the whole hit area.
+    await mouse('mousePressed', 2, 450, 1, 0, zero); await mouse('mouseReleased', 2, 450, 1, 0, zero);
+    await mouse('mousePressed', 2, 450, 2, 0, zero); await mouse('mouseReleased', 2, 450, 2, 0, zero);
+    const reopened = await until(async () => {
+      const v = await evalIn(zero, SNAP);
+      return v.ml === '260px' ? v : null;
+    }, 3000, 'never-opened side reopens at the configured default');
+    check('a side collapsed since mount reopens at the configured default width',
+      true, `ml=${reopened.ml} mr=${reopened.mr}`);
+
     // Clear the rules so later sections see the plain global defaults.
     await settingsSet({ theme: 'light', defaultLeft: 200, defaultRight: 200 });
 

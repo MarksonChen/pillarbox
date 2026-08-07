@@ -105,8 +105,8 @@ main {
    its stroke clipped there, so WIDTH sits inside the border instead. */
 .sec-head:not(.flip) .word-outline { margin-left: calc(5 * var(--u)); }
 /* Same on the flip side, where the word is flush right: half of the 4px
-   stroke falls outside the glyph, so TOUCH steps in to keep it whole. */
-.sec-head.flip .word-outline { margin-right: 2px; }
+   stroke falls outside the glyph, so TOUCH steps in off the edge. */
+.sec-head.flip .word-outline { margin-right: 1px; }
 .word-outline { color: transparent; -webkit-text-stroke: 4px var(--ink); }
 /* Under a heavy squeeze the head stacks: giant word on top, description on
    its own row below (word first in both flip directions). */
@@ -301,7 +301,9 @@ main {
   margin-top: 16px;
 }
 .tint-hex input {
-  width: 9ch;
+  /* The font is mono, so #rrggbb is exactly 7ch — plus the 12px padding and
+     4px border that box-sizing folds in, plus room for the caret after it. */
+  width: calc(7ch + 22px);
   margin-left: 6px;
   padding: 4px 6px;
   border: 2px solid var(--ink);
@@ -330,10 +332,14 @@ main {
   font: 400 12px/1.5 var(--mono);
 }
 .rules-table { margin: 0 26px; }
+/* The width/ord tracks are compressible, not fixed: this page runs the
+   extension's own pillars, so its column can be squeezed to MIN_GAP, and
+   main's overflow:hidden would clip the ↑↓✕ buttons out of reach rather
+   than scroll to them. */
 .rules-head,
 .rule {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 90px 90px 70px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 90px) minmax(0, 90px) minmax(0, 70px);
   align-items: center;
 }
 .rules-head { border-top: 3px solid var(--ink); font: 700 12px/1.4 var(--mono); }
@@ -385,6 +391,13 @@ main {
   letter-spacing: 0.06em;
 }
 .rule.invalid .rule-error { display: block; }
+/* Same fold as the head and the gesture ledger: give the numbers and the
+   buttons narrower lanes so the pattern keeps a usable field. */
+@container (max-width: 720px) {
+  .rules-head,
+  .rule { grid-template-columns: minmax(0, 1fr) minmax(0, 60px) minmax(0, 60px) minmax(0, 56px); }
+  .rule .rule-pattern { padding-right: 10px; }
+}
 #addRule {
   display: block;
   width: 100%;

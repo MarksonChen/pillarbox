@@ -8,7 +8,6 @@ var SQZ = globalThis.SQZ ??= {};
 SQZ.panels ??= (() => {
   const HOST_TAG = 'pillarbox-host';
   const DRAG_THRESHOLD = 3;   // px of pointer travel before a drag starts
-  const FALLBACK_WIDTH = 200; // dblclick-restore when nothing better is known
 
   const CSS = `
 :host { all: initial; }
@@ -93,7 +92,21 @@ SQZ.panels ??= (() => {
   let callbacks = null;
   let widths = { left: 0, right: 0 };  // CSS px, as displayed
   let zoom = 1;                        // page zoom; see setZoom()
-  const lastNonZero = { left: FALLBACK_WIDTH, right: FALLBACK_WIDTH };
+  // Width each side was last actually shown at, in CSS px: the dblclick
+  // restore target. null until the side has been open at least once — a rule
+  // with a zero side (youtube's 285x0) mounts one collapsed and noteWidths
+  // never fills it in — and `defaults` stands in for it there.
+  const lastNonZero = { left: null, right: null };
+  // The user's configured default widths, in stored px (at 100% zoom) like
+  // the settings they come from, so unlike lastNonZero they need no rescaling
+  // when the zoom moves. Deliberately the GLOBAL defaults and not this page's
+  // rule: a rule's zero side would restore that side to 0, i.e. to nothing,
+  // leaving the only gesture that can reopen it doing nothing at all.
+  let defaults = {
+    left: SQZ.DEFAULT_SETTINGS.defaultLeft,
+    right: SQZ.DEFAULT_SETTINGS.defaultRight,
+  };
+  let dragged = false; // a real drag just ended; swallow the dblclick after it
   let appearance = {
     theme: SQZ.DEFAULT_SETTINGS.theme,
     colorLight: SQZ.DEFAULT_SETTINGS.colorLight,
@@ -106,17 +119,32 @@ SQZ.panels ??= (() => {
   // Text selection is suppressed page-wide during a drag; the lock must be
   // released even when the drag never finishes normally (e.g. the sidebars
   // are unmounted mid-drag by an SPA navigation or a remote toggle-off).
+  // The page's own inline values are snapshotted and replayed, the same
+  // contract squeeze.js and fixed-bars.js honour for everything they write.
+  const SELECT_PROPS = ['user-select', '-webkit-user-select'];
+  let selectionPriors = null;
+
   function lockSelection() {
+    if (selectionLocked) return;
     selectionLocked = true;
-    document.documentElement.style.setProperty('user-select', 'none', 'important');
-    document.documentElement.style.setProperty('-webkit-user-select', 'none', 'important');
+    const style = document.documentElement.style;
+    selectionPriors = SELECT_PROPS.map((prop) => ({
+      prop,
+      value: style.getPropertyValue(prop),
+      priority: style.getPropertyPriority(prop),
+    }));
+    for (const prop of SELECT_PROPS) style.setProperty(prop, 'none', 'important');
   }
 
   function unlockSelection() {
     if (!selectionLocked) return;
     selectionLocked = false;
-    document.documentElement.style.removeProperty('user-select');
-    document.documentElement.style.removeProperty('-webkit-user-select');
+    const style = document.documentElement.style;
+    for (const prior of selectionPriors) {
+      style.removeProperty(prior.prop);
+      if (prior.value) style.setProperty(prior.prop, prior.value, prior.priority);
+    }
+    selectionPriors = null;
   }
 
   // Adopt a width pair and remember each side's last non-zero width — the
@@ -162,14 +190,41 @@ SQZ.panels ??= (() => {
     applyWidths();
   }
 
-  // The panels themselves are always driven in CSS px by the orchestrator,
-  // which already divides out the zoom. Only two things here know about it:
-  // the readout's units, and the collapse/restore memory — rescaling it
-  // keeps a side collapsed at one zoom level coming back the same size on
-  // screen at another.
+  // Pushed by the orchestrator at mount and again whenever the settings
+  // change, so a side that has never been open here reopens at the width the
+  // user actually configured. A non-positive default would make the gesture
+  // dead, so the shipped number stands in.
+  function setDefaults(left, right) {
+    defaults = {
+      left: left > 0 ? left : SQZ.DEFAULT_SETTINGS.defaultLeft,
+      right: right > 0 ? right : SQZ.DEFAULT_SETTINGS.defaultRight,
+    };
+  }
+
+  // Where a dblclick reopens a collapsed side.
+  function restoreTarget(side) {
+    return lastNonZero[side] ?? SQZ.storedToCss(defaults[side], zoom);
+  }
+
+  // The panels are normally driven in CSS px by the orchestrator, which has
+  // already divided the zoom out, so most of this module never sees it. Three
+  // things must: the readout's units, the collapse/restore memory, and the
+  // live widths — every CSS-px number held here means a fixed size on screen,
+  // and a zoom change moves what that costs in CSS px.
+  //
+  // Rescaling `widths` is redundant outside a drag (the orchestrator pushes
+  // the authoritative clamped pair immediately after the factor changes), but
+  // it is the only correction the non-dragged side gets DURING one: idle() is
+  // false, so both of the orchestrator's re-apply paths bail, and the pair
+  // reported by onDrag is what gets stored. Without it, zooming mid-drag
+  // silently rewrites the other side's saved width by the zoom ratio.
   function setZoom(next) {
     if (!(next > 0) || next === zoom) return;
-    for (const side of ['left', 'right']) lastNonZero[side] *= zoom / next;
+    const scale = zoom / next;
+    for (const side of ['left', 'right']) {
+      if (lastNonZero[side] !== null) lastNonZero[side] *= scale;
+      widths[side] *= scale;
+    }
     zoom = next;
     applyWidths();
   }
@@ -185,6 +240,7 @@ SQZ.panels ??= (() => {
     let started = false;
     let mirroring = false; // modifier key held: the far side follows
     let mirrorOffset = 0;  // far width - near width, frozen when engaging
+    let mirrorZoom = 1;    // the factor that offset is expressed in
 
     handle.addEventListener('pointerdown', (e) => {
       if (!callbacks || !e.isPrimary || e.button !== 0) return;
@@ -214,13 +270,22 @@ SQZ.panels ??= (() => {
       const modifier = e.altKey || e.ctrlKey || e.metaKey || e.shiftKey;
       if (modifier !== mirroring) {
         mirroring = modifier;
-        if (mirroring) mirrorOffset = widths[other] - widths[side];
+        if (mirroring) {
+          mirrorOffset = widths[other] - widths[side];
+          mirrorZoom = zoom;
+        }
         els?.[other].handle.classList.toggle('active', mirroring);
         if (appearance.showReadout) {
           els?.[other].readout.classList.toggle('show', mirroring);
         }
       }
       if (mirroring) {
+        // The offset is CSS px like the widths it came from, so a zoom
+        // change mid-drag has to move it too (see setZoom).
+        if (mirrorZoom !== zoom) {
+          mirrorOffset *= mirrorZoom / zoom;
+          mirrorZoom = zoom;
+        }
         const pair = SQZ.mirrorPair(pointerPx, mirrorOffset);
         widths[side] = pair.near;
         widths[other] = pair.far;
@@ -239,6 +304,11 @@ SQZ.panels ??= (() => {
       pointerId = null;
       if (!started) return;
       started = false;
+      // The second press of a double-click can still clear DRAG_THRESHOLD
+      // (Chrome's dblclick slop is wider than 3px), and the dblclick that
+      // follows would then undo the drag the user just made — collapsing the
+      // side, or with a modifier resetting both to the page defaults.
+      dragged = true;
       mirroring = false;
       host?.classList.remove('dragging');
       handle.classList.remove('active');
@@ -273,6 +343,7 @@ SQZ.panels ??= (() => {
       onDragEnd: opts.onDragEnd,
       onReset: opts.onReset,
     };
+    setDefaults(opts.defaults.left, opts.defaults.right);
     if (host) { // defensive: already mounted, just sync
       setWidths(opts.left, opts.right);
       setAppearance(opts.appearance);
@@ -317,6 +388,10 @@ SQZ.panels ??= (() => {
       root.append(panel);
       els[side] = { panel, handle, readout };
       wireDrag(side, handle, readout);
+      // Every press anywhere on a sidebar — handle presses bubble here too —
+      // opens a fresh gesture, so the "a drag just ended" flag only ever
+      // survives into the dblclick that closes the very pair that set it.
+      panel.addEventListener('pointerdown', () => { dragged = false; });
       // ONE dblclick gesture for the whole sidebar surface, handle
       // included (it bubbles here; the readout is pointer-events:none):
       // plain double-click collapses the side, or restores it when it is
@@ -326,13 +401,17 @@ SQZ.panels ??= (() => {
       // matching the drag convention (modifier = both sides).
       panel.addEventListener('dblclick', (e) => {
         if (!callbacks) return;
+        if (dragged) { // this pair of clicks was a resize, not a gesture
+          dragged = false;
+          return;
+        }
         if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
           callbacks.onReset?.();
         } else if (widths[side] > 0) {
           setSideWidth(side, 0);
         } else {
           const other = side === 'left' ? 'right' : 'left';
-          setSideWidth(side, SQZ.clampDrag(lastNonZero[side], widths[other]));
+          setSideWidth(side, SQZ.clampDrag(restoreTarget(side), widths[other]));
         }
       });
     }
@@ -350,8 +429,12 @@ SQZ.panels ??= (() => {
 
   function unmount() {
     if (!host) return;
-    // A drag in progress dies with its handle and never fires pointerup.
+    // A drag in progress dies with its handle and never fires pointerup, so
+    // clean up after it here: release the selection lock, and take .dragging
+    // off before the slide-out — the class suppresses transitions, and
+    // finish() can no longer remove it once `host` is nulled below.
     unlockSelection();
+    host.classList.remove('dragging');
     const oldHost = host;
     const oldEls = els;
     host = null;
@@ -378,6 +461,7 @@ SQZ.panels ??= (() => {
     unmount,
     setWidths,
     setZoom,
+    setDefaults,
     setAppearance,
     setVisible,
   };

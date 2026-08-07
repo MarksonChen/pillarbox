@@ -54,6 +54,11 @@ function moveRule(row, dir) {
   if (dir < 0) sibling.before(row);
   else sibling.after(row);
   syncMoveButtons();
+  // Re-inserting the row detaches the button that was just pressed, which
+  // drops focus to <body>. Reordering is usually several presses, so hand
+  // focus back — to the opposite arrow if this move reached the end.
+  const pressed = row.querySelector(dir < 0 ? '.rule-up' : '.rule-down');
+  (pressed.disabled ? row.querySelector(dir < 0 ? '.rule-down' : '.rule-up') : pressed).focus();
   saveSettings();
 }
 
@@ -154,6 +159,24 @@ function applyTint(hex) {
   input.dispatchEvent(new Event('change', { bubbles: true })); // -> saveSettings
 }
 
+let builtSide = null; // which side's swatch buttons are currently in the DOM
+
+function buildSwatches(side) {
+  const box = $('#tintSwatches');
+  box.textContent = '';
+  for (const hex of TINT_PRESETS[side]) {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'tint-swatch';
+    swatch.dataset.hex = hex;
+    swatch.style.setProperty('--swatch', hex);
+    swatch.append(document.createElement('i'), hex);
+    swatch.addEventListener('click', () => applyTint(hex));
+    box.append(swatch);
+  }
+  builtSide = side;
+}
+
 function refreshTintEditor() {
   for (const btn of document.querySelectorAll('.tint-open')) {
     btn.setAttribute('aria-expanded', String(btn.dataset.side === tintSide));
@@ -162,17 +185,15 @@ function refreshTintEditor() {
   editor.hidden = !tintSide;
   if (!tintSide) return;
   $('#tintEditorLabel').textContent = tintSide === 'light' ? 'DAY TINT' : 'NIGHT TINT';
+  // The preset list is fixed per side, so the buttons are built only when the
+  // side changes. Rebuilding them here would destroy the swatch the user just
+  // pressed (applyTint -> saveSettings -> syncTints -> here) and drop focus to
+  // <body> — and would re-run on every keystroke in any field, since
+  // syncTints is wired to the form's `input` event.
+  if (builtSide !== tintSide) buildSwatches(tintSide);
   const current = tintInput(tintSide).value;
-  const box = $('#tintSwatches');
-  box.textContent = '';
-  for (const hex of TINT_PRESETS[tintSide]) {
-    const swatch = document.createElement('button');
-    swatch.type = 'button';
-    swatch.className = hex === current ? 'tint-swatch active' : 'tint-swatch';
-    swatch.style.setProperty('--swatch', hex);
-    swatch.append(document.createElement('i'), hex);
-    swatch.addEventListener('click', () => applyTint(hex));
-    box.append(swatch);
+  for (const swatch of document.querySelectorAll('.tint-swatch')) {
+    swatch.classList.toggle('active', swatch.dataset.hex === current);
   }
   if (document.activeElement !== $('#tintHex')) $('#tintHex').value = current;
 }
@@ -184,6 +205,9 @@ for (const btn of document.querySelectorAll('.tint-open')) {
   });
 }
 $('#tintClose').addEventListener('click', () => {
+  // Hiding the editor strands focus on this button, so hand it back to the
+  // trigger that opened it — while tintSide still names one.
+  $(`.tint-open[data-side="${tintSide}"]`)?.focus();
   tintSide = null;
   refreshTintEditor();
 });
@@ -195,8 +219,17 @@ $('#tintHex').addEventListener('change', () => {
   else $('#tintHex').value = tintInput(tintSide).value; // revert, keep the stored tint
 });
 
+// Bumped by every save, snapshotted across every read: a read that resolves
+// after the user has changed something must not repaint the form from its
+// stale snapshot (which would also wipe an in-progress rule edit, since
+// renderRules rebuilds every row). Same guard as the content script's
+// recEpoch, for the same race on the other side of storage.
+let saveEpoch = 0;
+
 async function loadSettings() {
+  const epoch = saveEpoch;
   const raw = await chrome.storage.sync.get(SQZ.SETTINGS_KEY);
+  if (epoch !== saveEpoch) return;
   const s = SQZ.mergeSettings(raw[SQZ.SETTINGS_KEY]);
   const radio = document.querySelector(`input[name="theme"][value="${s.theme}"]`);
   if (radio) radio.checked = true;
@@ -215,6 +248,7 @@ async function loadSettings() {
 const echoes = SQZ.makeEchoes();
 
 async function saveSettings() {
+  saveEpoch++;
   const settings = formState();
   $('#defaultLeft').value = settings.defaultLeft; // reflect clamping
   $('#defaultRight').value = settings.defaultRight;
