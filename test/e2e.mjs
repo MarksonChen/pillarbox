@@ -758,6 +758,24 @@ async function main() {
     check('a side collapsed since mount reopens at the configured default width',
       true, `ml=${reopened.ml} mr=${reopened.mr}`);
 
+    // Substring mode compares the pattern literally, so a URL pasted straight
+    // out of the address bar works unescaped. This exact text as a REGEX would
+    // not match: the ? would make the preceding l optional and the literal ?
+    // in the URL is never matched.
+    await settingsSet({
+      theme: 'light', defaultLeft: 200, defaultRight: 200,
+      rules: [{ pattern: 'page.html?ruled=2', mode: 'substring', left: 360, right: 120 }],
+    });
+    const sub = await openPage(`${BASE}/page.html?ruled=2`);
+    await sleep(300);
+    await toggleViaWorker(`${BASE}/page.html?ruled=2`);
+    const ss = await until(async () => {
+      const v = await evalIn(sub, SNAP);
+      return v.ml === '360px' && v.mr === '120px' ? v : null;
+    }, 4000, 'substring rule applied on first enable');
+    check('substring rule matches a URL containing regex metacharacters', true,
+      `ml=${ss.ml} mr=${ss.mr}`);
+
     // Clear the rules so later sections see the plain global defaults.
     await settingsSet({ theme: 'light', defaultLeft: 200, defaultRight: 200 });
 
@@ -849,6 +867,34 @@ async function main() {
         && st.settings.rules[1].left === 425;
     }, 3000, 'added rule saved');
     check('options: adding a rule saves it', true);
+
+    // MATCH BY toggles between regex and substring, saves like every other
+    // edit, and re-labels itself. New rows start on regex.
+    const modeState = await evalIn(opts, `(() => {
+      const rows = [...document.querySelectorAll('#rules .rule')];
+      const before = rows.map((r) => r.querySelector('.rule-mode').dataset.mode);
+      rows[0].querySelector('.rule-mode').click();
+      const btn = rows[0].querySelector('.rule-mode');
+      return { before, after: btn.dataset.mode, label: btn.textContent,
+        placeholder: rows[0].querySelector('.rule-pattern').placeholder };
+    })()`);
+    await until(async () => {
+      const st = await evalIn(sw, `chrome.storage.sync.get('settings')`);
+      return st.settings?.rules?.[0]?.mode === 'substring'
+        && st.settings.rules[1].mode === 'regex';
+    }, 3000, 'mode toggle saved');
+    check('options: MATCH BY toggles to substring and saves (new rows are regex)',
+      modeState.before.every((m) => m === 'regex') && modeState.after === 'substring'
+        && modeState.label === 'SUBSTRING'
+        && !modeState.placeholder.includes('\\'),
+      JSON.stringify(modeState));
+    // Put it back so the reorder/remove checks below see what they expect.
+    await evalIn(opts, `(document.querySelector('.rule-mode').click(), true)`);
+    await until(async () => {
+      const st = await evalIn(sw, `chrome.storage.sync.get('settings')`);
+      return st.settings?.rules?.[0]?.mode === 'regex';
+    }, 3000, 'mode toggled back');
+
     // First match wins, so order is data: moving the second rule up must
     // persist the swapped order (and the edge buttons stay disabled).
     const moveState = await evalIn(opts, `(() => {

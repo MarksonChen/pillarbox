@@ -28,7 +28,10 @@ through `chrome.scripting.executeScript` is harmless.
 
 - `chrome.storage.sync['settings']` — `{theme, defaultLeft, defaultRight,
   colorLight, colorDark, showReadout, rules}`. `rules` is an ordered list of
-  `{pattern, left, right}`; the first matching regex wins. Three rules ship as
+  `{pattern, mode, left, right}`; the first match wins. `mode` is `'regex'` or
+  `'substring'`, and **absent means `'regex'`** — rules saved before the mode
+  existed keep matching exactly as they did, which is why `SQZ.ruleMode()`
+  normalizes rather than the storage layer migrating. Three rules ship as
   defaults until the first options save, which persists the list wholesale (so
   deleting a shipped rule sticks).
 - `chrome.storage.local['page:<origin+path+query>']` — `{on, left, right, t}`

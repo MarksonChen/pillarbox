@@ -45,8 +45,11 @@ dragging, and change the keyboard shortcut.
 
 You can also write **per-URL rules**: a URL pattern gets its own default
 widths, which apply the first time you enable that page and whenever you reset
-it. Three ship out of the box (nature.com articles, zhihu questions, YouTube
-watch pages) and are ordinary rules — edit or delete them freely.
+it. Click a rule's **MATCH BY** cell to choose how its pattern is compared —
+**substring**, where you can paste a URL straight out of the address bar, or
+**regex** for anything cleverer. Three ship out of the box (nature.com
+articles, zhihu questions, YouTube watch pages) and are ordinary rules — edit
+or delete them freely.
 
 ## Good to know
 

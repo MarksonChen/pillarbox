@@ -93,11 +93,18 @@
         <div class="word" aria-hidden="true">RULES</div>
         <div class="sec-label">03 — PER-URL DEFAULTS<br>FIRST MATCH WINS</div>
       </div>
-      <p class="rules-note">PAGES MATCHING A REGEX (URL WITHOUT #HASH) GET THESE DEFAULTS.
-      ORDER MATTERS. RESIZED PAGES KEEP THEIR SAVED WIDTHS.</p>
+      <p class="rules-note">PAGES MATCHING A PATTERN GET THESE DEFAULTS.
+      ORDER MATTERS. RESIZED PAGES KEEP THEIR SAVED WIDTHS.
+      (TRAILING <span class="hint" tabindex="0"
+        aria-describedby="hashTip">#HASH<span class="hint-tip" id="hashTip"
+        role="tooltip">Some URLs end with "#something", like
+        en.wikipedia.org/wiki/Pillarbox#References. This marks a place inside the page
+        rather than a different page, so we cut it off before regex matching. Your
+        regex only ever sees the URL up to before the #, which makes $-anchoring of regex
+        easier to write. </span></span> IS CLIPPED FROM MATCHING)</p>
       <div class="rules-table">
         <div class="rules-head" aria-hidden="true">
-          <span>URL PATTERN (REGEX)</span><span>LEFT</span><span>RIGHT</span><span class="ord">ORD</span>
+          <span>MATCH BY</span><span>URL PATTERN</span><span>LEFT</span><span>RIGHT</span><span class="ord">ORD</span>
         </div>
         <div id="rules"></div>
         <button id="addRule" type="button">+ ADD RULE</button>

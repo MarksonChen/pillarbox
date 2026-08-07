@@ -34,10 +34,12 @@ function formState() {
 // empty pattern stays in the UI but is not saved; an invalid regex is saved
 // (nothing typed is ever thrown away) but flagged here and skipped by the
 // content script at match time.
+// A substring pattern is compared literally, so nothing about it can be
+// invalid; only a regex can fail to compile.
 function markValidity(row) {
   const input = row.querySelector('.rule-pattern');
   let ok = true;
-  if (input.value) {
+  if (input.value && row.querySelector('.rule-mode').dataset.mode !== 'substring') {
     try { new RegExp(input.value); } catch { ok = false; }
   }
   input.classList.toggle('invalid', !ok);
@@ -70,12 +72,20 @@ function syncMoveButtons() {
   });
 }
 
+// Each mode shows the same example URL written the way that mode wants it —
+// the placeholder is the shortest explanation of the difference.
+const MODE_PLACEHOLDER = {
+  regex: 'https://www\\.example\\.com/articles',
+  substring: 'https://www.example.com/articles',
+};
+
 function ruleRow(rule) {
   const row = document.createElement('div');
   row.className = 'rule';
   row.innerHTML = `
+    <button type="button" class="rule-mode"></button>
     <input type="text" class="rule-pattern" spellcheck="false" autocomplete="off"
-           placeholder="https://www\\.example\\.com/articles" aria-label="URL regex">
+           aria-label="URL pattern">
     <input type="number" class="rule-left" min="0" step="5"
            aria-label="Left width in px">
     <input type="number" class="rule-right" min="0" step="5"
@@ -86,9 +96,33 @@ function ruleRow(rule) {
       <button type="button" class="rule-remove" title="Remove rule" aria-label="Remove rule">✕</button>
     </span>
     <span class="rule-error">INVALID REGULAR EXPRESSION — THIS RULE IS IGNORED.</span>`;
+  // Regex is the default, and an absent mode on a stored rule means regex.
+  const modeBtn = row.querySelector('.rule-mode');
+  const setMode = (mode) => {
+    const other = mode === 'regex' ? 'substring' : 'regex';
+    modeBtn.dataset.mode = mode;
+    modeBtn.textContent = mode.toUpperCase();
+    modeBtn.title = `Matching by ${mode} — switch to ${other}`;
+    modeBtn.setAttribute('aria-label', `Match by ${mode}. Click to match by ${other} instead.`);
+    row.querySelector('.rule-pattern').placeholder = MODE_PLACEHOLDER[mode];
+    markValidity(row); // a broken regex stops being an error once it is text
+  };
+  setMode(SQZ.ruleMode(rule));
+  modeBtn.addEventListener('click', () => {
+    setMode(modeBtn.dataset.mode === 'regex' ? 'substring' : 'regex');
+    saveSettings();
+  });
   row.querySelector('.rule-pattern').value = rule.pattern ?? '';
   row.querySelector('.rule-left').value = SQZ.clampDefault(rule.left);
   row.querySelector('.rule-right').value = SQZ.clampDefault(rule.right);
+  // The width cells behave like the giant default-width numbers: every focus
+  // or click selects the whole value, so typing replaces it outright and the
+  // inverse selection block stands in for the focus ring the ledger drops.
+  for (const cls of ['.rule-left', '.rule-right']) {
+    const input = row.querySelector(cls);
+    input.addEventListener('focus', () => input.select());
+    input.addEventListener('click', () => input.select());
+  }
   row.querySelector('.rule-up').addEventListener('click', () => moveRule(row, -1));
   row.querySelector('.rule-down').addEventListener('click', () => moveRule(row, +1));
   row.querySelector('.rule-remove').addEventListener('click', () => {
@@ -114,6 +148,7 @@ function rulesFromForm() {
     if (!pattern) return [];
     return [{
       pattern,
+      mode: row.querySelector('.rule-mode').dataset.mode,
       left: SQZ.clampDefault(row.querySelector('.rule-left').value),
       right: SQZ.clampDefault(row.querySelector('.rule-right').value),
     }];

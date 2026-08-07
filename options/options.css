@@ -327,10 +327,39 @@ main {
 
 /* ---- 03: rules ledger ---- */
 .rules-note {
+  position: relative; /* anchors .hint-tip */
   margin: 0;
   padding: 12px 26px 10px;
   font: 400 12px/1.5 var(--mono);
 }
+/* "#HASH" carries the one piece of behaviour a regex can't express: what the
+   pattern is actually matched against. Hover or focus it for the rest. */
+.hint {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+/* Stretched to the note's own width rather than anchored to the word, so it
+   can never spill out of main's overflow:hidden under a heavy squeeze. */
+.hint-tip {
+  position: absolute;
+  left: 26px;
+  right: 26px;
+  top: 100%;
+  z-index: 1;
+  padding: 10px 12px;
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 5px 5px 0 var(--ink);
+  /* The one piece of sentence-case copy on the poster, deliberately: it
+     quotes a URL, and URLs are case-sensitive — so is rule matching. Setting
+     it in the page's caps would print an address that does not exist. */
+  font: 400 11.5px/1.7 var(--mono);
+  opacity: 0;
+  pointer-events: none;
+}
+.hint:hover .hint-tip,
+.hint:focus .hint-tip { opacity: 1; }
 .rules-table { margin: 0 26px; }
 /* The width/ord tracks are compressible, not fixed: this page runs the
    extension's own pillars, so its column can be squeezed to MIN_GAP, and
@@ -339,7 +368,8 @@ main {
 .rules-head,
 .rule {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 90px) minmax(0, 90px) minmax(0, 70px);
+  grid-template-columns:
+    minmax(0, 104px) minmax(0, 1fr) minmax(0, 90px) minmax(0, 90px) minmax(0, 70px);
   align-items: center;
 }
 .rules-head { border-top: 3px solid var(--ink); font: 700 12px/1.4 var(--mono); }
@@ -366,6 +396,34 @@ main {
   color: inherit;
   font: inherit;
 }
+/* The mode toggle carries its own state as its label. Inverting on hover and
+   on focus says "this is a control, and it will change" without a border —
+   and doubles as the focus indicator the rest of the ledger gets from its
+   selection block. */
+.rule-mode {
+  justify-self: start;
+  padding: 3px 5px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.rule-mode:hover,
+.rule-mode:focus-visible {
+  outline: none;
+  background: var(--ink);
+  color: var(--paper);
+}
+/* No focus ring inside the ledger: a box drawn around one cell reads as a
+   second, competing rule in a table already made of rules. The inverse
+   selection block is the indicator instead — the same trade the giant width
+   numbers make, and the width cells select whole on focus like those do. */
+.rule input:focus-visible { outline: none; }
+.rule input::selection { background: var(--ink); color: var(--paper); }
+/* Whole-value selection leaves a caret nothing to mark. The pattern field
+   keeps its caret: a regex is edited in place, not replaced. */
+.rule input[type="number"] { caret-color: transparent; }
 .rule .rule-pattern { padding-right: 26px; }
 .rule input[type="number"] { appearance: textfield; }
 .rule input::-webkit-outer-spin-button,
@@ -395,7 +453,10 @@ main {
    buttons narrower lanes so the pattern keeps a usable field. */
 @container (max-width: 720px) {
   .rules-head,
-  .rule { grid-template-columns: minmax(0, 1fr) minmax(0, 60px) minmax(0, 60px) minmax(0, 56px); }
+  .rule {
+    grid-template-columns:
+      minmax(0, 86px) minmax(0, 1fr) minmax(0, 60px) minmax(0, 60px) minmax(0, 56px);
+  }
   .rule .rule-pattern { padding-right: 10px; }
 }
 #addRule {

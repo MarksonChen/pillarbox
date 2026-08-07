@@ -15,11 +15,13 @@ SQZ.DEFAULT_SETTINGS = Object.freeze({
   showReadout: false,       // px readout bubble while dragging a handle
   // Per-URL default widths, first match wins. These three ship as defaults;
   // they are ordinary rules in the options page — edit or remove freely
-  // (the first save persists the list wholesale, so removal sticks).
+  // (the first save persists the list wholesale, so removal sticks). The
+  // youtube one is deliberately a substring rule: it doubles as the worked
+  // example of the mode where a URL needs no escaping at all.
   rules: Object.freeze([
     Object.freeze({ pattern: 'https://www\\.nature\\.com/articles', left: 535, right: 0 }),
     Object.freeze({ pattern: 'https://www\\.zhihu\\.com/question', left: 425, right: 425 }),
-    Object.freeze({ pattern: 'https://www\\.youtube\\.com/watch', left: 285, right: 0 }),
+    Object.freeze({ pattern: 'https://www.youtube.com/watch', mode: 'substring', left: 285, right: 0 }),
   ]),
 });
 
@@ -101,21 +103,32 @@ SQZ.clampDefault = (value) => {
   return Number.isFinite(n) && n > 0 ? n : 0;
 };
 
-// First matching per-URL rule, or null. Patterns are regexes tested against
-// origin + path + query — the #hash is ignored, mirroring pageKey — and an
-// unanchored plain prefix like "https://www.example.com/articles" works as
-// expected. Invalid or empty patterns are skipped. Rule widths are px at
-// 100% zoom, like every stored width.
+// How a rule compares its pattern. A missing mode means 'regex', so rules
+// saved before the mode existed keep matching exactly as they always did.
+SQZ.ruleMode = (rule) => (rule?.mode === 'substring' ? 'substring' : 'regex');
+
+// First matching per-URL rule, or null. Patterns are tested against
+// origin + path + query — the #hash is ignored, mirroring pageKey.
+// A 'regex' pattern is unanchored, so a plain prefix like
+// "https://www.example.com/articles" already works, but every . ? + in a URL
+// is a metacharacter and wants escaping. A 'substring' pattern is compared
+// literally, which is what lets a URL copied out of the address bar do the
+// obvious thing. Both are case-sensitive. Invalid or empty patterns are
+// skipped. Rule widths are px at 100% zoom, like every stored width.
 SQZ.matchRule = (rules, url) => {
   if (!Array.isArray(rules)) return null;
   const u = new URL(url);
   const target = u.origin + u.pathname + u.search;
   for (const rule of rules) {
     if (typeof rule?.pattern !== 'string' || rule.pattern === '') continue;
-    try {
-      if (!new RegExp(rule.pattern).test(target)) continue;
-    } catch {
-      continue; // invalid regex: the options page flags it, we skip it
+    if (SQZ.ruleMode(rule) === 'substring') {
+      if (!target.includes(rule.pattern)) continue;
+    } else {
+      try {
+        if (!new RegExp(rule.pattern).test(target)) continue;
+      } catch {
+        continue; // invalid regex: the options page flags it, we skip it
+      }
     }
     return { left: SQZ.clampDefault(rule.left), right: SQZ.clampDefault(rule.right) };
   }
