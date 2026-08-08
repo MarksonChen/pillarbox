@@ -64,6 +64,140 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // keep the channel open for the async response
 });
 
+// --- cross-origin CSS relay ------------------------------------------------
+// The breakpoint shifter (content/media-queries.js) cannot read a
+// cross-origin stylesheet (cssRules throws) nor fetch it (content scripts
+// follow the page's CORS); the worker can, thanks to host_permissions. The
+// text is prepared for replay inside a <style> clone at the DOCUMENT's base
+// URL, so every relative url() is absolutized against the sheet's own URL
+// and @import chains are inlined (a clone's imports would be fetched by the
+// page and land back in cross-origin darkness, unshiftable).
+
+const CSS_FETCH_TIMEOUT = 15000;
+const CSS_BUDGET = 8 * 1024 * 1024; // total bytes across one import tree
+const CSS_IMPORT_DEPTH = 3;
+
+async function fetchCssFile(url, budget) {
+  let res;
+  try {
+    res = await fetch(url, {
+      credentials: 'omit',
+      signal: AbortSignal.timeout(CSS_FETCH_TIMEOUT),
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  const text = await res.text().catch(() => null);
+  if (text === null) return null;
+  budget.left -= text.length;
+  return budget.left < 0 ? null : text;
+}
+
+// Rewrite url(...) references (and any @import url we leave behind) to be
+// absolute. Skips absolute schemes, data:/blob:, protocol-relative //, and
+// bare #fragments (same-document SVG paint servers must stay relative).
+function absolutizeCssUrls(text, baseUrl) {
+  const resolve = (v) => {
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(v) || v === '') return null;
+    try { return new URL(v, baseUrl).href; } catch { return null; }
+  };
+  text = text.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"\s]+))\s*\)/gi,
+    (m, dq, sq, bare) => {
+      const abs = resolve(dq ?? sq ?? bare);
+      return abs === null ? m : `url("${abs.replace(/"/g, '%22')}")`;
+    });
+  // String-form @import ('@import "x.css";') for the chains left in place
+  // when the depth or byte budget runs out.
+  text = text.replace(/(@import\s+)(?:"([^"]*)"|'([^']*)')/gi, (m, head, dq, sq) => {
+    const abs = resolve(dq ?? sq);
+    return abs === null ? m : `${head}"${abs.replace(/"/g, '%22')}"`;
+  });
+  return text;
+}
+
+// Split the leading import statements off a stylesheet: only @charset,
+// @layer statements and @import may precede other rules, so a small scan
+// from the top is exact enough. Comments between them are skipped; the body
+// is left untouched.
+function splitCssImports(text) {
+  const imports = [];
+  let prefix = '';
+  let i = 0;
+  for (;;) {
+    const ws = /^(?:\s+|\/\*[\s\S]*?\*\/)+/.exec(text.slice(i));
+    if (ws) i += ws[0].length;
+    const rest = text.slice(i);
+    let m;
+    if ((m = /^@charset\s+"[^"]*"\s*;/i.exec(rest))) {
+      i += m[0].length; // dropped: the text is already decoded
+    } else if ((m = /^@layer\s+[^{;]*;/i.exec(rest))) {
+      prefix += m[0] + '\n'; // layer-order statement: keep, order matters
+      i += m[0].length;
+    } else if ((m = /^@import\s+(?:url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"]*?))\s*\)|"([^"]*)"|'([^']*)')\s*([^;]*);/i.exec(rest))) {
+      imports.push({
+        url: (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? '').trim(),
+        tail: m[6].trim(),
+        raw: m[0],
+      });
+      i += m[0].length;
+    } else {
+      break;
+    }
+  }
+  return { prefix, imports, body: text.slice(i) };
+}
+
+// An import's condition tail becomes equivalent wrapper blocks around the
+// inlined text: layer(name)/layer -> @layer, supports(...) -> @supports,
+// the rest is a media query -> @media.
+function wrapImportedCss(text, tail) {
+  let media = tail;
+  const layer = /^layer(?:\(([^)]*)\))?\s*/i.exec(media);
+  if (layer) media = media.slice(layer[0].length);
+  const sup = /^supports\(((?:[^()]|\([^()]*\))*)\)\s*/i.exec(media);
+  if (sup) media = media.slice(sup[0].length);
+  media = media.trim();
+  if (media && media.toLowerCase() !== 'all') text = `@media ${media} {\n${text}\n}`;
+  if (sup) text = `@supports ${sup[1]} {\n${text}\n}`;
+  if (layer) text = `@layer ${layer[1] ? layer[1].trim() + ' ' : ''}{\n${text}\n}`;
+  return text;
+}
+
+async function inlineCss(url, budget, depth, seen) {
+  if (seen.has(url)) return ''; // import cycle: drop the repeat
+  seen.add(url);
+  let text = await fetchCssFile(url, budget);
+  if (text === null) return null;
+  text = absolutizeCssUrls(text, url);
+  const { prefix, imports, body } = splitCssImports(text);
+  let out = prefix;
+  for (const imp of imports) {
+    // Recurse while depth and budget allow; otherwise keep the (already
+    // absolutized) @import — the page fetches it natively, styled but
+    // unshifted, which beats dropping the rules wholesale.
+    const child = depth > 0 && /^https?:/i.test(imp.url)
+      ? await inlineCss(imp.url, budget, depth - 1, seen)
+      : null;
+    out += (child === null ? imp.raw : wrapImportedCss(child, imp.tail)) + '\n';
+  }
+  return out + body;
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== SQZ.MSG.FETCH_CSS) return;
+  if (sender.tab === undefined) return; // only content scripts ask
+  const url = String(msg.url ?? '');
+  if (!/^https?:/i.test(url)) {
+    sendResponse({ ok: false });
+    return;
+  }
+  inlineCss(url, { left: CSS_BUDGET }, CSS_IMPORT_DEPTH, new Set())
+    .then((text) => sendResponse(text === null ? { ok: false } : { ok: true, text }))
+    .catch(() => sendResponse({ ok: false }));
+  return true; // keep the channel open for the async response
+});
+
 // One pending clear per tab, tracked like pruneTimer above: without this an
 // earlier click's timer erases the ✕ a later click just painted.
 const badgeTimers = new Map();

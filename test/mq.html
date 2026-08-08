@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pillarbox — media-query test</title>
+<!-- Whole-sheet gate: the shifter must re-evaluate this through the CSSOM
+     while leaving the media ATTRIBUTE untouched. -->
+<link id="wholeLink" rel="stylesheet" href="mq-whole.css" media="(max-width: 1000px)">
+<!-- Cross-origin (different port = different origin): cssRules throws, so
+     the extension must fetch this through the worker and replay it in a
+     <style> clone. Port must match PORT2 in e2e.mjs. -->
+<link id="crossLink" rel="stylesheet" href="http://127.0.0.1:8124/cross.css">
+<style id="mainCss">
+  /* No body color: #whole and #imp assert the un-styled rgb(0,0,0). */
+  body { margin: 0; font: 15px/1.6 system-ui, sans-serif; }
+  /* At 1440px none of the 1000px breakpoints below match; squeezed by the
+     300+300 defaults the effective width is 840px and all of them flip. */
+  #brk { color: rgb(10, 10, 10); }
+  @media (max-width: 1000px) { #brk { color: rgb(20, 20, 20); } }
+  /* Desktop-only rule: must turn OFF under the squeeze. */
+  #desk { color: rgb(10, 10, 10); }
+  @media (min-width: 1001px) { #desk { color: rgb(30, 30, 30); } }
+  /* Range syntax nested inside a style rule (nested CSS). */
+  #nest { color: rgb(10, 10, 10); }
+  #nest { @media (400px <= width <= 1000px) { color: rgb(40, 40, 40); } }
+  /* em breakpoint (62.5em = 1000px at the 16px default): the calc() shift
+     must keep the unit rather than assume a px-per-em. */
+  #em { color: rgb(10, 10, 10); }
+  @media (max-width: 62.5em) { #em { color: rgb(45, 45, 45); } }
+  /* Goes portrait once the effective width drops under the window height
+     (the e2e derives the exact threshold from the live innerHeight). */
+  #ori { color: rgb(10, 10, 10); }
+  @media (orientation: portrait) { #ori { color: rgb(50, 50, 50); } }
+  /* Target for a rule added later via insertRule (no DOM mutation): only
+     the rescan interval can find it. */
+  #late { color: rgb(10, 10, 10); }
+</style>
+<!-- Later same-origin sheet: must keep beating the cross-origin clone
+     (cascade order), exactly as it beats the original. -->
+<style id="afterCss">#xover { color: rgb(200, 100, 0); }</style>
+</head>
+<body>
+  <div id="brk">brk — classic max-width breakpoint</div>
+  <div id="desk">desk — desktop-only min-width rule</div>
+  <div id="nest">nest — range syntax, nested CSS</div>
+  <div id="em">em — em-unit breakpoint</div>
+  <div id="ori">ori — orientation: portrait</div>
+  <div id="late">late — insertRule target</div>
+  <div id="whole">whole — whole-sheet link media gate</div>
+  <div id="x">x — cross-origin breakpoint</div>
+  <div id="imp">imp — @import inside the cross-origin sheet</div>
+  <div id="xover">xover — later same-origin sheet must win</div>
+  <div id="bgprobe">bgprobe — relative url() in the cross-origin sheet</div>
+</body>
+</html>

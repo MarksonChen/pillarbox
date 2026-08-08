@@ -13,14 +13,21 @@ SQZ.DEFAULT_SETTINGS = Object.freeze({
   colorLight: '#eef0f3',    // panel color when the light theme is active
   colorDark: '#1d2126',     // panel color when the dark theme is active
   showReadout: false,       // px readout bubble while dragging a handle
-  // Per-URL default widths, first match wins. These three ship as defaults;
-  // they are ordinary rules in the options page — edit or remove freely
-  // (the first save persists the list wholesale, so removal sticks). The
-  // youtube one is deliberately a substring rule: it doubles as the worked
-  // example of the mode where a URL needs no escaping at all.
+  responsive: true,         // shift the page's width breakpoints by the
+                            // panels' total width, so sites switch to the
+                            // narrow layout they would use in a window of
+                            // the squeezed size (media-queries.js)
+  // Per-URL defaults, first match wins. These three ship as defaults; they
+  // are ordinary rules in the options page — edit or remove freely (the
+  // first save persists the list wholesale, so removal sticks). Two double
+  // as the worked example of a field: the youtube one is a substring rule,
+  // the mode where a URL needs no escaping at all, and the zhihu one sets
+  // autoShow, so a question page arrives with its pillars already up and
+  // the column means something on a fresh install rather than reading as
+  // decoration.
   rules: Object.freeze([
     Object.freeze({ pattern: 'https://www\\.nature\\.com/articles', left: 535, right: 0 }),
-    Object.freeze({ pattern: 'https://www\\.zhihu\\.com/question', left: 425, right: 425 }),
+    Object.freeze({ pattern: 'https://www\\.zhihu\\.com/question', autoShow: true, left: 425, right: 425 }),
     Object.freeze({ pattern: 'https://www.youtube.com/watch', mode: 'substring', left: 285, right: 0 }),
   ]),
 });
@@ -41,6 +48,7 @@ SQZ.MSG = Object.freeze({
   TOGGLE: 'SQZ_TOGGLE',
   ZOOM: 'SQZ_ZOOM',         // worker -> content: the tab's zoom factor changed
   GET_ZOOM: 'SQZ_GET_ZOOM', // content -> worker: what is this tab's zoom?
+  FETCH_CSS: 'SQZ_FETCH_CSS', // content -> worker: cross-origin sheet text
 });
 
 // Must mirror manifest.json content_scripts[0].js exactly (same files, same
@@ -49,6 +57,7 @@ SQZ.MSG = Object.freeze({
 SQZ.CONTENT_FILES = Object.freeze([
   'shared/defaults.js',
   'content/squeeze.js',
+  'content/media-queries.js',
   'content/fixed-bars.js',
   'content/panels.js',
   'content/index.js',
@@ -107,15 +116,20 @@ SQZ.clampDefault = (value) => {
 // saved before the mode existed keep matching exactly as they always did.
 SQZ.ruleMode = (rule) => (rule?.mode === 'substring' ? 'substring' : 'regex');
 
-// First matching per-URL rule, or null. Patterns are tested against
-// origin + path + query — the #hash is ignored, mirroring pageKey.
+// A rule's new-page behaviour: true opens the pillars by itself on a page
+// that has no record of its own. Absent means "do nothing", so rules saved
+// before this existed still leave new pages alone.
+SQZ.ruleAutoShow = (rule) => rule?.autoShow === true;
+
+// The first per-URL rule matching this URL, or null. Patterns are tested
+// against origin + path + query — the #hash is ignored, mirroring pageKey.
 // A 'regex' pattern is unanchored, so a plain prefix like
 // "https://www.example.com/articles" already works, but every . ? + in a URL
 // is a metacharacter and wants escaping. A 'substring' pattern is compared
 // literally, which is what lets a URL copied out of the address bar do the
 // obvious thing. Both are case-sensitive. Invalid or empty patterns are
 // skipped. Rule widths are px at 100% zoom, like every stored width.
-SQZ.matchRule = (rules, url) => {
+SQZ.findRule = (rules, url) => {
   if (!Array.isArray(rules)) return null;
   const u = new URL(url);
   const target = u.origin + u.pathname + u.search;
@@ -130,9 +144,20 @@ SQZ.matchRule = (rules, url) => {
         continue; // invalid regex: the options page flags it, we skip it
       }
     }
-    return { left: SQZ.clampDefault(rule.left), right: SQZ.clampDefault(rule.right) };
+    return rule;
   }
   return null;
+};
+
+// That rule's default widths, or null. Narrowed to the two width fields on
+// purpose: callers spread the result straight into a page record (the reset
+// gesture, the collapsed-toggle revive), so a rule's own bookkeeping —
+// pattern, mode, autoShow — must not ride along into stored per-page state.
+SQZ.matchRule = (rules, url) => {
+  const rule = SQZ.findRule(rules, url);
+  return rule
+    ? { left: SQZ.clampDefault(rule.left), right: SQZ.clampDefault(rule.right) }
+    : null;
 };
 
 // The sidebars may never leave less than this much page visible between

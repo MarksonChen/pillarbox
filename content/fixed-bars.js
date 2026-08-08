@@ -18,6 +18,8 @@ var SQZ = globalThis.SQZ ??= {};
 SQZ.fixedBars ??= (() => {
   const FULL_WIDTH_RATIO = 0.9; // rect must span >= 90% of the viewport
   const INLINE_SCAN_MAX = 200;  // bigger added subtrees go to the idle queue
+  const DIRTY_DELAY = 300;      // coalescing window for ancestor-driven rescans
+  const DIRTY_ROOT_MAX = 32;    // above this, one whole-document walk is cheaper
   // Inline marker on every adopted element so a later life of this content
   // script (extension reload) can find and strip stale overrides exactly.
   const MARKER = '--pillarbox';
@@ -31,6 +33,8 @@ SQZ.fixedBars ??= (() => {
   let queue = [];
   let queueIndex = 0;
   let rescanTimer = 0;
+  const dirty = new Set();      // elements whose subtree awaits re-considering
+  let dirtyTimer = 0;
 
   function escapes(rect, vw) {
     return rect.left < widths.left - 1 || rect.right > vw - widths.right + 1;
@@ -244,6 +248,41 @@ SQZ.fixedBars ??= (() => {
     pump();
   }
 
+  // An attribute change on an ANCESTOR can reveal or widen a descendant —
+  // `body.scrolled .footer { display: flex }` is how most "show the floating
+  // footer once the user scrolls" handlers work. The footer's own attributes
+  // never move, so reconsider(m.target) can never see it and the bar stays at
+  // full viewport width, running under the panels. Its subtree is queued
+  // instead. (recheckAnchors walks descendants too, but only ever to release.)
+  function markDirty(el) {
+    dirty.add(el);
+    // Armed once and left to run, NOT restarted per mark: class churn is
+    // continuous on a busy SPA, and a debounce that restarts on every
+    // mutation would be starved indefinitely by exactly those pages.
+    if (!dirtyTimer) dirtyTimer = setTimeout(flushDirty, DIRTY_DELAY);
+  }
+
+  function flushDirty() {
+    dirtyTimer = 0;
+    // Above the cap, the pairwise containment filter below costs more than the
+    // single full pass that subsumes every root anyway.
+    const roots = dirty.size > DIRTY_ROOT_MAX
+      ? [document.documentElement]
+      : [...dirty].filter((el) => el.isConnected);
+    dirty.clear();
+    if (!widths) return;
+    for (const root of roots) {
+      // A nested root would walk the same elements twice; the outermost
+      // covers it. (consider() skips managed/rejected members regardless.)
+      if (roots.some((other) => other !== root && other.contains(root))) continue;
+      // Appending to a live queue, like the big-subtree childList path below:
+      // pump() picks the new entries up, and document order within a subtree
+      // keeps the parents-before-children invariant that scan relies on.
+      for (const kid of root.querySelectorAll('*')) queue.push(kid);
+    }
+    pump();
+  }
+
   function onMutations(mutations) {
     // Same orphan rule as the squeeze watcher: never fight a fresh script.
     if (SQZ.orphanGuard?.()) return;
@@ -254,6 +293,9 @@ SQZ.fixedBars ??= (() => {
       if (m.type === 'attributes') {
         reconsider(m.target);
         (attrTargets ??= new Set()).add(m.target);
+        // Leaves have no descendants to reveal — the common case for the
+        // class churn this observer sees, and free to skip.
+        if (m.target.firstElementChild) markDirty(m.target);
         continue;
       }
       for (const node of m.addedNodes) {
@@ -318,6 +360,9 @@ SQZ.fixedBars ??= (() => {
     queueIndex = 0;
     clearTimeout(rescanTimer);
     rescanTimer = 0;
+    clearTimeout(dirtyTimer);
+    dirtyTimer = 0;
+    dirty.clear();
     for (const el of [...managed.keys()]) release(el);
     widths = null;
   }

@@ -22,6 +22,7 @@ function formState() {
     defaultLeft: SQZ.clampDefault($('#defaultLeft').value),
     defaultRight: SQZ.clampDefault($('#defaultRight').value),
     showReadout: $('#showReadout').checked,
+    responsive: $('#responsive').checked,
     colorLight: $('#colorLight').value,
     colorDark: $('#colorDark').value,
     rules: rulesFromForm(),
@@ -86,6 +87,7 @@ function ruleRow(rule) {
     <button type="button" class="rule-mode"></button>
     <input type="text" class="rule-pattern" spellcheck="false" autocomplete="off"
            aria-label="URL pattern">
+    <button type="button" class="rule-show"></button>
     <input type="number" class="rule-left" min="0" step="5"
            aria-label="Left width in px">
     <input type="number" class="rule-right" min="0" step="5"
@@ -110,6 +112,25 @@ function ruleRow(rule) {
   setMode(SQZ.ruleMode(rule));
   modeBtn.addEventListener('click', () => {
     setMode(modeBtn.dataset.mode === 'regex' ? 'substring' : 'regex');
+    saveSettings();
+  });
+  // New-page behaviour: the same self-labelling toggle as MATCH BY. "New"
+  // means a page with no saved record — once you have toggled a page by
+  // hand, that page keeps answering for itself and the rule stops deciding.
+  const showBtn = row.querySelector('.rule-show');
+  const setAutoShow = (on) => {
+    showBtn.dataset.autoShow = String(on);
+    showBtn.textContent = on ? 'SHOW PILLARS' : 'DO NOTHING';
+    showBtn.title = on
+      ? 'Matching pages open their pillars on load — switch to do nothing'
+      : 'Matching pages stay untouched until you open them — switch to show pillars';
+    showBtn.setAttribute('aria-label', on
+      ? 'On a new matching page, show pillars. Click to do nothing instead.'
+      : 'On a new matching page, do nothing. Click to show pillars instead.');
+  };
+  setAutoShow(SQZ.ruleAutoShow(rule));
+  showBtn.addEventListener('click', () => {
+    setAutoShow(showBtn.dataset.autoShow !== 'true');
     saveSettings();
   });
   row.querySelector('.rule-pattern').value = rule.pattern ?? '';
@@ -149,6 +170,7 @@ function rulesFromForm() {
     return [{
       pattern,
       mode: row.querySelector('.rule-mode').dataset.mode,
+      autoShow: row.querySelector('.rule-show').dataset.autoShow === 'true',
       left: SQZ.clampDefault(row.querySelector('.rule-left').value),
       right: SQZ.clampDefault(row.querySelector('.rule-right').value),
     }];
@@ -271,6 +293,7 @@ async function loadSettings() {
   $('#defaultLeft').value = s.defaultLeft;
   $('#defaultRight').value = s.defaultRight;
   $('#showReadout').checked = s.showReadout === true;
+  $('#responsive').checked = s.responsive !== false; // default on
   $('#colorLight').value = SQZ.sanitizeColor(s.colorLight, SQZ.DEFAULT_SETTINGS.colorLight);
   $('#colorDark').value = SQZ.sanitizeColor(s.colorDark, SQZ.DEFAULT_SETTINGS.colorDark);
   renderRules(s.rules);
@@ -376,6 +399,16 @@ $('#openShortcuts').addEventListener('click', () => {
 
 $('#openIssue').addEventListener('click', () => {
   chrome.tabs.create({ url: 'https://github.com/MarksonChen/pillarbox/issues/new' });
+});
+
+// Header strip. Same destination as the bug card at the foot of the page —
+// the two are the same errand reached from either end of a long poster.
+$('#openFeedback').addEventListener('click', () => {
+  chrome.tabs.create({ url: 'https://github.com/MarksonChen/pillarbox/issues/new' });
+});
+
+$('#openCoffee').addEventListener('click', () => {
+  chrome.tabs.create({ url: 'https://buymeacoffee.com/chenmarksof' });
 });
 
 // Web Store review link. REVIEW_URL pins the listing once published; until

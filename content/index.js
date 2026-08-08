@@ -98,10 +98,16 @@ if (!SQZ.booted) {
       adoptZoom(typeof hint === 'number' ? SQZ.sanitizeZoom(hint) : null);
       watchDpr();
       settings = SQZ.mergeSettings(syncRaw[SQZ.SETTINGS_KEY]);
-      rec = localRaw[KEY] ?? null;
-      if (rec?.on) {
+      const stored = localRaw[KEY] ?? null;
+      rec = stored;
+      // No record at all means this page is new to us, and a rule may say to
+      // open it anyway. Nothing is written for that: the rule re-decides on
+      // every load, and minting a record per page merely visited would churn
+      // the LRU cap for no gain. Only a deliberate act — drag, reset,
+      // toggle — makes this page's state its own.
+      if (stored?.on || (!stored && autoShowsHere())) {
         enable();
-        persist({}); // refresh the record's LRU timestamp
+        if (stored) persist({}); // refresh the record's LRU timestamp
         confirmZoom(); // verify the hint off the boot path
       } else {
         phase = 'dormant';
@@ -115,6 +121,14 @@ if (!SQZ.booted) {
       // (squeeze-sidebars-host is the pre-0.3 host tag.)
       const stale = document.querySelector(`${SQZ.panels.HOST_TAG}, squeeze-sidebars-host`);
       if (!stale) return;
+      // Wake the orphaned previous life before touching anything: its DOM
+      // listeners still fire (isolated worlds outlive the extension), and
+      // the guarded handler tears it down synchronously DURING this
+      // dispatch — restoring the html margins, the fixed-bar overrides and,
+      // crucially, its media-query edits, which live only in the CSSOM and
+      // carry no DOM fingerprint this life could find. The manual strips
+      // below stay as belt-and-braces for a world that never got to run.
+      dispatchEvent(new Event('resize'));
       stale.remove();
       const style = document.documentElement.style;
       // user-select covers a reload that happened mid-drag.
@@ -142,6 +156,17 @@ if (!SQZ.booted) {
             && s.getPropertyPriority('right') === 'important') {
           for (const prop of ['left', 'right', 'width']) s.removeProperty(prop);
         }
+      }
+      // A dead previous world's cross-origin clones: remove each and
+      // re-enable the sheet it shadowed. (Its in-place mediaText edits are
+      // unrecoverable without that world's registry — the resize poke above
+      // is what handles those, by making the old life restore them itself.)
+      for (const el of document.querySelectorAll('style[data-pillarbox-mq]')) {
+        const href = el.getAttribute('data-pillarbox-mq');
+        for (const sheet of document.styleSheets) {
+          if (sheet.href === href && sheet.disabled) sheet.disabled = false;
+        }
+        el.remove();
       }
     }
 
@@ -264,12 +289,36 @@ if (!SQZ.booted) {
       SQZ.fixedBars.start(left, right, (el) => el.localName === SQZ.panels.HOST_TAG);
     }
 
+    // Breakpoint shifting (media-queries.js), gated on the setting. A shift
+    // application can flip the page into a different layout whose bars the
+    // fixed-bar observer never sees coming (a media flip changes computed
+    // styles without touching any attribute), so every apply nudges the
+    // manager — its update() schedules the debounced whole-document rescan.
+    function startMediaShift() {
+      if (settings.responsive === false) return;
+      const { left, right } = effWidths();
+      SQZ.mediaQueries.start(left, right, {
+        onApply: () => {
+          if (!idle()) return;
+          const w = effWidths();
+          SQZ.fixedBars.update(w.left, w.right); // no-op before fixedBars.start
+        },
+      });
+    }
+
     // Default widths for THIS page: the first matching per-URL rule wins,
     // otherwise the global defaults. Consulted when a page has no saved
     // widths yet, and by the double-click reset.
     function defaultWidths() {
       return SQZ.matchRule(settings.rules, location.href)
         ?? { left: settings.defaultLeft, right: settings.defaultRight };
+    }
+
+    // Does a rule tell this URL to open its pillars unprompted? Only ever
+    // asked about a page with no record — a stored on:false is a decision
+    // the user made here, and it outranks the rule every time.
+    function autoShowsHere() {
+      return SQZ.ruleAutoShow(SQZ.findRule(settings.rules, location.href));
     }
 
     function enable() {
@@ -282,6 +331,7 @@ if (!SQZ.booted) {
       const { left, right } = effWidths();
       SQZ.squeeze.apply(left, right);
       SQZ.squeeze.watch();
+      startMediaShift(); // before the fixed-bar scan sees the page
       SQZ.panels.mount({
         left,
         right,
@@ -297,6 +347,7 @@ if (!SQZ.booted) {
     }
 
     function disable() {
+      SQZ.mediaQueries.stop(); // native queries back before bars release
       SQZ.fixedBars.stop();
       SQZ.panels.unmount();
       SQZ.squeeze.unwatch();
@@ -341,6 +392,7 @@ if (!SQZ.booted) {
       const { left, right } = effWidths();
       SQZ.panels.setWidths(left, right);
       SQZ.squeeze.update(left, right);
+      SQZ.mediaQueries.update(left, right); // no-op when off; coalesces itself
       SQZ.fixedBars.update(left, right);
     }
 
@@ -435,6 +487,13 @@ if (!SQZ.booted) {
     }
 
     function applyRecord() {
+      // Same new-page question init() asks, re-asked wherever the record can
+      // change underfoot: an in-page navigation to a fresh URL, a bfcache
+      // return, or the worker's LRU pruner dropping this page's record (that
+      // last one is housekeeping, and it should not shut the pillars). Held
+      // in memory only — see init(); a write here would defeat the pruner it
+      // is reacting to.
+      if (!rec && autoShowsHere()) rec = { on: true, ...defaultWidths() };
       if (!rec?.on) {
         if (phase === 'active') disable();
         else phase = 'dormant';
@@ -450,6 +509,11 @@ if (!SQZ.booted) {
       SQZ.panels.setAppearance(appearanceFromSettings());
       const dw = defaultsFromSettings();
       SQZ.panels.setDefaults(dw.left, dw.right);
+      // Live-flip the breakpoint shifter when its setting moved.
+      const wantShift = settings.responsive !== false && !suspended;
+      if (wantShift !== SQZ.mediaQueries.running()) {
+        wantShift ? startMediaShift() : SQZ.mediaQueries.stop();
+      }
     }
 
     function onDragStart() {
@@ -468,6 +532,7 @@ if (!SQZ.booted) {
         right: SQZ.cssToStored(pair.right, zoom),
       };
       SQZ.squeeze.update(pair.left, pair.right);
+      SQZ.mediaQueries.update(pair.left, pair.right); // coalesced internally
       SQZ.fixedBars.update(pair.left, pair.right);
     }
 
@@ -548,6 +613,9 @@ if (!SQZ.booted) {
     function onBeforePrint() {
       if (phase !== 'active' || suspended) return;
       suspended = true;
+      // Print media evaluates width features against the paper size; a
+      // shifted breakpoint would corrupt the printout, so restore fully.
+      SQZ.mediaQueries.stop();
       SQZ.fixedBars.stop();
       SQZ.squeeze.unwatch();
       SQZ.squeeze.restore();
@@ -561,6 +629,7 @@ if (!SQZ.booted) {
       const { left, right } = effWidths();
       SQZ.squeeze.apply(left, right);
       SQZ.squeeze.watch();
+      startMediaShift();
       // rec may have moved (cross-tab sync) while width application was
       // suspended for printing — re-sync the panels too.
       SQZ.panels.setWidths(left, right);

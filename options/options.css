@@ -44,7 +44,14 @@ main {
 :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
 /* ---- spec strip & masthead ---- */
+/* Raised over the masthead: the display type below sets line-height well
+   under 1, so its inline box — what hit-testing and selection actually use,
+   not the visible ink — bleeds ~31px above its own box and across this band.
+   Unraised, PILLAR swallowed the clicks on the first two links. The page's
+   own pillars sit at z-index 2147483647, so 1 stays clear of them. */
 .spec-strip {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
@@ -56,6 +63,10 @@ main {
 }
 
 .masthead { margin-top: 6px; }
+/* Display type is decoration, and its overflowing inline box reaches well
+   past the ink into its neighbours — so a stray double-click near it would
+   select a word nobody meant to grab. Nothing here is worth copying. */
+.mast-word, .word { user-select: none; }
 .mast-word {
   /* Flush-left: cancel the glyph's own left side bearing so the ink — not
      the text box — starts at the page edge. P, B and R all carry the same
@@ -372,7 +383,8 @@ main {
 .rule {
   display: grid;
   grid-template-columns:
-    minmax(0, 104px) minmax(0, 1fr) minmax(0, 90px) minmax(0, 90px) minmax(0, 70px);
+    minmax(0, 104px) minmax(0, 1fr) minmax(0, 132px)
+    minmax(0, 90px) minmax(0, 90px) minmax(0, 70px);
   align-items: center;
 }
 .rules-head { border-top: 3px solid var(--ink); font: 700 12px/1.4 var(--mono); }
@@ -399,21 +411,25 @@ main {
   color: inherit;
   font: inherit;
 }
-/* The mode toggle carries its own state as its label. Inverting on hover and
-   on focus says "this is a control, and it will change" without a border —
-   and doubles as the focus indicator the rest of the ledger gets from its
+/* The two toggles carry their own state as their label. Inverting on hover
+   and on focus says "this is a control, and it will change" without a border
+   — and doubles as the focus indicator the rest of the ledger gets from its
    selection block. */
-.rule-mode {
+.rule-mode,
+.rule-show {
   justify-self: start;
   padding: 3px 5px;
   border: 0;
   background: none;
   color: inherit;
   font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 .rule-mode:hover,
-.rule-mode:focus-visible {
+.rule-mode:focus-visible,
+.rule-show:hover,
+.rule-show:focus-visible {
   outline: none;
   background: var(--ink);
   color: var(--paper);
@@ -458,7 +474,8 @@ main {
   .rules-head,
   .rule {
     grid-template-columns:
-      minmax(0, 86px) minmax(0, 1fr) minmax(0, 60px) minmax(0, 60px) minmax(0, 56px);
+      minmax(0, 86px) minmax(0, 1fr) minmax(0, 112px)
+      minmax(0, 60px) minmax(0, 60px) minmax(0, 56px);
   }
   .rule .rule-pattern { padding-right: 10px; }
 }

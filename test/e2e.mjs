@@ -141,7 +141,8 @@ async function main() {
     const name = req.url === '/' ? 'page.html' : req.url.split('?')[0].slice(1);
     try {
       const data = readFileSync(path.join(ROOT, 'test', path.basename(name)));
-      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.setHeader('content-type', name.endsWith('.css')
+        ? 'text/css; charset=utf-8' : 'text/html; charset=utf-8');
       res.end(data);
     } catch {
       res.statusCode = 404;
@@ -149,6 +150,34 @@ async function main() {
     }
   });
   await new Promise((r) => server.listen(PORT, '127.0.0.1', r));
+
+  // Second origin (the port differs) for the breakpoint-shifter tests:
+  // stylesheets served from here are cross-origin to the test pages, so
+  // cssRules throws and the extension has to go through the worker fetch +
+  // <style> clone path. The port is hardcoded in test/mq.html.
+  const PORT2 = 8124;
+  const CROSS_CSS = '@import url("mq-import.css") (max-width: 1000px);\n'
+    + '#x { color: rgb(10, 10, 10); }\n'
+    + '@media (max-width: 1000px) { #x { color: rgb(60, 60, 60); } }\n'
+    + '#xover { color: rgb(0, 0, 200); }\n'
+    + '#bgprobe { background-image: url(px.gif); }\n';
+  const server2 = createServer((req, res) => {
+    const u = req.url.split('?')[0];
+    if (u === '/cross.css') {
+      res.setHeader('content-type', 'text/css');
+      res.end(CROSS_CSS);
+    } else if (u === '/mq-import.css') {
+      res.setHeader('content-type', 'text/css');
+      res.end('#imp { color: rgb(70, 70, 70); }\n');
+    } else if (u === '/px.gif') {
+      res.setHeader('content-type', 'image/gif');
+      res.end(Buffer.from('R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==', 'base64'));
+    } else {
+      res.statusCode = 404;
+      res.end('not found');
+    }
+  });
+  await new Promise((r) => server2.listen(PORT2, '127.0.0.1', r));
 
   const profile = mkdtempSync(path.join(tmpdir(), 'sqz-e2e-'));
   const chrome = spawn(chromeBin, [
@@ -182,6 +211,7 @@ async function main() {
   const cleanup = () => {
     try { chrome.kill('SIGKILL'); } catch {}
     server.close();
+    server2.close();
   };
   process.on('exit', cleanup);
 
@@ -269,6 +299,7 @@ async function main() {
         sticky: rect('sticky'),
         late: rect('lateBar'),
         morph: rect('morphBar'),
+        anc: rect('ancestorBar'),
       };
     })()`;
 
@@ -314,6 +345,28 @@ async function main() {
     check('late-added fixed bar inset',
       near(s.late.left, DEF.l) && near(s.late.width, inner(s)), JSON.stringify(s.late));
     check('class-morphed fixed bar inset', near(s.morph.left, DEF.l), JSON.stringify(s.morph));
+
+    // Footer revealed by a class on <body>, not on itself. Its own attributes
+    // never change, so reconsider(target) alone leaves it at full viewport
+    // width running under the panels — the "doesn't resize until I scroll"
+    // report (scrolling only helped because those pages ALSO touch the bar's
+    // own class). Only the dirty-subtree rescan can find it.
+    //
+    // The settle is what makes this test mean anything: every width change
+    // schedules a debounced whole-document rescan, and one of those landing
+    // after the reveal would adopt the bar for the wrong reason and hide a
+    // regression. Sit out any pending rescan first, so the ancestor-driven
+    // subtree walk is the only mechanism left that can inset it.
+    await sleep(1000);
+    await evalIn(page, `document.getElementById('revealNow').click(); true`);
+    s = await until(async () => {
+      const v = await evalIn(page, SNAP);
+      return v.anc && v.anc.width > 0 && near(v.anc.left, DEF.l) ? v : null;
+      // Report the miss as a FAIL with the offending rect instead of
+      // aborting the whole suite on a timeout.
+    }, 4000, 'ancestor-revealed footer inset').catch(() => evalIn(page, SNAP));
+    check('footer revealed by an ancestor class is inset',
+      near(s.anc.left, DEF.l) && near(s.anc.width, inner(s)), JSON.stringify(s.anc));
 
     const settingsSet = (obj) => evalIn(sw,
       `chrome.storage.sync.set({ settings: ${JSON.stringify(obj)} })`);
@@ -776,6 +829,61 @@ async function main() {
     check('substring rule matches a URL containing regex metacharacters', true,
       `ml=${ss.ml} mr=${ss.mr}`);
 
+    // NEW PAGE BEHAVIOR: a rule carrying autoShow opens a page that has no
+    // record of its own — no toggle, no click — at that same rule's widths.
+    await settingsSet({
+      theme: 'light', defaultLeft: 200, defaultRight: 200,
+      rules: [
+        { pattern: 'autoshow=1', autoShow: true, left: 320, right: 140 },
+        { pattern: 'autoshow=2', autoShow: true, left: 180, right: 60 },
+      ],
+    });
+    const auto = await openPage(`${BASE}/page.html?autoshow=1`);
+    const autoSnap = await until(async () => {
+      const v = await evalIn(auto, SNAP);
+      return v.ml === '320px' && v.mr === '140px' && v.host ? v : null;
+    }, 4000, 'autoShow rule opened the page on load');
+    check('SHOW PILLARS opens a new page by itself, at the rule widths', true,
+      `ml=${autoSnap.ml} mr=${autoSnap.mr}`);
+
+    // The same question is re-asked on an in-page navigation: arriving at a
+    // second matching URL adopts THAT rule's widths without a reload. (The
+    // do-nothing half of this — SPA nav to a recordless URL closing the
+    // sidebars — is covered by the per-URL memory section above.)
+    await evalIn(auto, `history.pushState({}, '', '/page.html?autoshow=2'); true`);
+    const spaSnap = await until(async () => {
+      const v = await evalIn(auto, SNAP);
+      return v.ml === '180px' && v.mr === '60px' && v.host ? v : null;
+    }, 4000, 'SPA nav into a second autoShow rule');
+    check('SPA nav to another SHOW PILLARS URL adopts that rule\'s widths', true,
+      `ml=${spaSnap.ml} mr=${spaSnap.mr}`);
+    await evalIn(auto, `history.pushState({}, '', '/page.html?autoshow=1'); true`);
+    await until(async () => (await evalIn(auto, SNAP)).ml === '320px',
+      4000, 'SPA nav back to the first autoShow rule');
+
+    // ...and writes nothing. The rule re-decides on every load, so merely
+    // visiting a matching page must not mint a record and spend LRU budget.
+    const autoKey = `page:${BASE}/page.html?autoshow=1`;
+    const autoStored = await evalIn(sw,
+      `chrome.storage.local.get(${JSON.stringify(autoKey)})`);
+    check('SHOW PILLARS leaves no page record behind',
+      Object.keys(autoStored).length === 0, JSON.stringify(autoStored));
+
+    // Turning it off is a decision about THIS page, and it outranks the rule
+    // — on this load and on every later one.
+    const autoOff = await toggleViaWorker(`${BASE}/page.html?autoshow=1`);
+    check('a SHOW PILLARS page can still be toggled off',
+      autoOff && autoOff.on === false, JSON.stringify(autoOff));
+    await until(async () => {
+      const st = await evalIn(sw, `chrome.storage.local.get(${JSON.stringify(autoKey)})`);
+      return st[autoKey]?.on === false;
+    }, 3000, 'explicit off recorded');
+    const autoAgain = await openPage(`${BASE}/page.html?autoshow=1`);
+    await sleep(500);
+    const reSnap = await evalIn(autoAgain, SNAP);
+    check('an explicit off beats the rule on the next load',
+      reSnap.ml === '0px' && !reSnap.host, JSON.stringify(reSnap));
+
     // Clear the rules so later sections see the plain global defaults.
     await settingsSet({ theme: 'light', defaultLeft: 200, defaultRight: 200 });
 
@@ -794,6 +902,7 @@ async function main() {
       rule0: document.querySelector('.rule-pattern')?.value,
       rule0Left: document.querySelector('.rule-left')?.value,
       rule0Right: document.querySelector('.rule-right')?.value,
+      behaviors: [...document.querySelectorAll('#rules .rule-show')].map((b) => b.textContent),
     })`);
     check('options: current settings rendered (readout defaults off)',
       optState.theme === 'light' && optState.left === '200'
@@ -802,10 +911,16 @@ async function main() {
       JSON.stringify(optState));
     // Storage holds no `rules` key at this point, so the SHIPPED defaults
     // must be showing: nature.com/articles 535x0 first, then zhihu, youtube.
+    // Only zhihu ships opening by itself — that mix is a product decision,
+    // so pin it rather than let a stray edit to the defaults slip through.
     check('options: shipped default rules rendered (nature 535x0, zhihu, youtube)',
       optState.ruleRows === 3 && optState.rule0 === 'https://www\\.nature\\.com/articles'
         && optState.rule0Left === '535' && optState.rule0Right === '0',
       JSON.stringify({ rows: optState.ruleRows, rule0: optState.rule0 }));
+    check('options: only the shipped zhihu rule defaults to SHOW PILLARS',
+      JSON.stringify(optState.behaviors)
+        === JSON.stringify(['DO NOTHING', 'SHOW PILLARS', 'DO NOTHING']),
+      JSON.stringify(optState.behaviors));
 
     // Clicking the dark radio saves immediately and re-themes the page.
     await evalIn(opts, `document.querySelector('input[name="theme"][value="dark"]').click(); true`);
@@ -894,6 +1009,35 @@ async function main() {
       const st = await evalIn(sw, `chrome.storage.sync.get('settings')`);
       return st.settings?.rules?.[0]?.mode === 'regex';
     }, 3000, 'mode toggled back');
+
+    // NEW PAGE BEHAVIOR is the same kind of self-labelling toggle, and rules
+    // that predate it (neither row was saved with autoShow) must read as
+    // DO NOTHING rather than as anything sticky.
+    const showState = await evalIn(opts, `(() => {
+      const rows = [...document.querySelectorAll('#rules .rule')];
+      const before = rows.map((r) => r.querySelector('.rule-show').textContent);
+      rows[0].querySelector('.rule-show').click();
+      const btn = rows[0].querySelector('.rule-show');
+      return { before, after: btn.textContent, flag: btn.dataset.autoShow };
+    })()`);
+    await until(async () => {
+      const st = await evalIn(sw, `chrome.storage.sync.get('settings')`);
+      return st.settings?.rules?.[0]?.autoShow === true
+        && st.settings.rules[1].autoShow === false;
+    }, 3000, 'new-page behavior saved');
+    check('options: NEW PAGE BEHAVIOR toggles to SHOW PILLARS and saves '
+      + '(rules without the flag read as DO NOTHING)',
+      showState.before.every((t) => t === 'DO NOTHING')
+        && showState.after === 'SHOW PILLARS' && showState.flag === 'true',
+      JSON.stringify(showState));
+    // Back to DO NOTHING: the rows below are asserted on by pattern, not by
+    // behaviour, but leaving a live autoShow rule in sync storage would open
+    // pillars uninvited on the pages the later sections load.
+    await evalIn(opts, `(document.querySelector('.rule-show').click(), true)`);
+    await until(async () => {
+      const st = await evalIn(sw, `chrome.storage.sync.get('settings')`);
+      return st.settings?.rules?.[0]?.autoShow === false;
+    }, 3000, 'new-page behavior toggled back');
 
     // First match wins, so order is data: moving the second rule up must
     // persist the swapped order (and the edge buttons stay disabled).
@@ -1086,6 +1230,189 @@ async function main() {
       vwRestored.shellW === '' && vwRestored.innerW === '100vw'
         && !vwRestored.brkStyle.includes('margin'),
       JSON.stringify(vwRestored));
+
+    // ---------- breakpoint shifting (media queries see the squeezed width) ----------
+    const MQ_URL = `${BASE}/mq.html`;
+    const MQ_KEY = `page:${MQ_URL}`;
+    // 1440 - (300 + 300) = 840px effective, crossing the page's 1000px
+    // breakpoints. (The settings sections above left 200/200 saved.)
+    await settingsSet({ theme: 'light', defaultLeft: 300, defaultRight: 300 });
+    const MQ_SNAP = `(() => {
+      const c = (id) => getComputedStyle(document.getElementById(id)).color;
+      const link = document.getElementById('crossLink');
+      const main = document.getElementById('mainCss').sheet;
+      let firstMedia = null;
+      for (const r of main.cssRules) {
+        if (r.media) { firstMedia = r.media.mediaText; break; }
+      }
+      return {
+        ml: getComputedStyle(document.documentElement).marginLeft,
+        ih: innerHeight,
+        brk: c('brk'), desk: c('desk'), nest: c('nest'), em: c('em'),
+        ori: c('ori'), late: c('late'), whole: c('whole'),
+        x: c('x'), imp: c('imp'), xover: c('xover'),
+        bg: getComputedStyle(document.getElementById('bgprobe')).backgroundImage,
+        wholeAttr: document.getElementById('wholeLink').getAttribute('media'),
+        clones: document.querySelectorAll('style[data-pillarbox-mq]').length,
+        crossDisabled: !!(link.sheet && link.sheet.disabled),
+        firstMedia,
+      };
+    })()`;
+    const mqPage = await openPage(MQ_URL);
+    await sleep(300);
+    let mq = await until(async () => {
+      const v = await evalIn(mqPage, MQ_SNAP);
+      return v.x === 'rgb(10, 10, 10)' ? v : null; // cross sheet loaded
+    }, 5000, 'mq baseline (cross-origin sheet loaded)');
+    check('mq baseline: no breakpoint active at 1440px',
+      mq.brk === 'rgb(10, 10, 10)' && mq.desk === 'rgb(30, 30, 30)'
+        && mq.nest === 'rgb(10, 10, 10)' && mq.em === 'rgb(10, 10, 10)'
+        && mq.ori === 'rgb(10, 10, 10)' && mq.whole === 'rgb(0, 0, 0)'
+        && mq.imp === 'rgb(0, 0, 0)' && mq.clones === 0,
+      JSON.stringify(mq));
+
+    const mqOn = await toggleViaWorker(MQ_URL);
+    check('mq page toggles on', mqOn && mqOn.on === true, JSON.stringify(mqOn));
+    mq = await until(async () => {
+      const v = await evalIn(mqPage, MQ_SNAP);
+      return v.brk === 'rgb(20, 20, 20)' && v.x === 'rgb(60, 60, 60)' ? v : null;
+    }, 8000, 'breakpoints flipped (inline + cross-origin clone)');
+    check('inline breakpoints see the squeezed width (max off-on, min on-off, range, em, nested)',
+      mq.desk === 'rgb(10, 10, 10)' && mq.nest === 'rgb(40, 40, 40)'
+        && mq.em === 'rgb(45, 45, 45)', JSON.stringify(mq));
+    // Portrait means height >= width, and the headless window loses some
+    // height to browser chrome — derive the expectation from the live
+    // innerHeight rather than assuming the 900px window survives intact.
+    check('orientation follows the 840px effective width',
+      (mq.ori === 'rgb(50, 50, 50)') === (mq.ih >= 840),
+      JSON.stringify({ ori: mq.ori, ih: mq.ih }));
+
+    // 400+400 leaves 640px — portrait for any usable window height. This is
+    // the branch the user-visible "sites switch to their portrait layout"
+    // report is about.
+    await evalIn(sw, `chrome.storage.local.set({ ${JSON.stringify(MQ_KEY)}:`
+      + ' { on: true, left: 400, right: 400, t: Date.now() } })');
+    mq = await until(async () => {
+      const v = await evalIn(mqPage, MQ_SNAP);
+      return v.ml === '400px' && (v.ori === 'rgb(50, 50, 50)') === (v.ih >= 640) ? v : null;
+    }, 8000, 'orientation goes portrait at the 640px effective width');
+    check('orientation reads portrait once the squeeze makes height the long side',
+      mq.brk === 'rgb(20, 20, 20)', JSON.stringify({ ori: mq.ori, ih: mq.ih, brk: mq.brk }));
+    check('whole-sheet <link media> gate re-evaluates; the attribute is untouched',
+      mq.whole === 'rgb(80, 80, 80)' && mq.wholeAttr === '(max-width: 1000px)',
+      JSON.stringify({ whole: mq.whole, attr: mq.wholeAttr }));
+    check('cross-origin sheet cloned (worker fetch, @import inlined, original disabled)',
+      mq.imp === 'rgb(70, 70, 70)' && mq.clones === 1 && mq.crossDisabled,
+      JSON.stringify({ imp: mq.imp, clones: mq.clones, disabled: mq.crossDisabled }));
+    check('clone keeps cascade order (later same-origin sheet still wins)',
+      mq.xover === 'rgb(200, 100, 0)', mq.xover);
+    check('clone url()s absolutized against the sheet origin',
+      mq.bg.includes(':8124/px.gif'), mq.bg);
+
+    // shiftText unit battery, in the content-script world.
+    const B = await evalIn(sw, `(async () => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((t) => (t.url || '').startsWith(${JSON.stringify(MQ_URL)}));
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const t = (txt) => SQZ.mediaQueries.shiftText(txt, 600);
+          return {
+            classic: t('(max-width: 700px)'),
+            em: t('(min-width: 40em)'),
+            pair: t('screen and (min-width: 900px) and (max-width: 1600px)'),
+            rangeFwd: t('(width <= 700px)'),
+            rangeChain: t('(400px < width < 900px)'),
+            calc: t('(min-width: calc(100px + 10em))'),
+            zero: t('(max-width: 0)'),
+            device: t('(max-device-width: 700px)'),
+            height: t('(min-height: 500px)'),
+            negated: t('not (max-width: 700px)'),
+            list: t('print, (max-width: 700px)'),
+            res: t('(min-resolution: 2dppx)'),
+            boolWidth: t('(width)'),
+          };
+        },
+      });
+      return result;
+    })()`);
+    check('shiftText: width features shifted by S, everything else untouched',
+      B.classic === '(max-width: calc(700px + 600px))'
+        && B.em === '(min-width: calc(40em + 600px))'
+        && B.pair === 'screen and (min-width: calc(900px + 600px)) and (max-width: calc(1600px + 600px))'
+        && B.rangeFwd === '(width <= calc(700px + 600px))'
+        && B.rangeChain === '(calc(400px + 600px) < width < calc(900px + 600px))'
+        && B.calc === '(min-width: calc(calc(100px + 10em) + 600px))'
+        && B.zero === '(max-width: calc(0px + 600px))'
+        && B.device === '(max-device-width: 700px)'
+        && B.height === '(min-height: 500px)'
+        && B.negated === 'not (max-width: calc(700px + 600px))'
+        && B.list === 'print, (max-width: calc(700px + 600px))'
+        && B.res === '(min-resolution: 2dppx)'
+        && B.boolWidth === '(width)',
+      JSON.stringify(B));
+
+    // A breakpoint the page adds via insertRule mutates no DOM node; only
+    // the rescan interval can find it.
+    await evalIn(mqPage, `(() => {
+      const sheet = document.getElementById('mainCss').sheet;
+      sheet.insertRule('@media (max-width: 1000px) { #late { color: rgb(90, 90, 90) } }',
+        sheet.cssRules.length);
+      return true;
+    })()`);
+    await until(async () => (await evalIn(mqPage, MQ_SNAP)).late === 'rgb(90, 90, 90)', 8000,
+      'insertRule-added breakpoint picked up by the rescan interval');
+    check('a rule added via insertRule (no DOM mutation) is shifted', true);
+
+    // Width changes re-derive every shift from the saved original text —
+    // a double shift would leave brk stuck on.
+    await evalIn(sw, `chrome.storage.local.set({ ${JSON.stringify(MQ_KEY)}:`
+      + ' { on: true, left: 50, right: 50, t: Date.now() } })');
+    mq = await until(async () => {
+      const v = await evalIn(mqPage, MQ_SNAP);
+      return v.ml === '50px' && v.brk === 'rgb(10, 10, 10)' && v.x === 'rgb(10, 10, 10)'
+        ? v : null;
+    }, 8000, 'narrow sidebars: breakpoints back off (1340px effective)');
+    check('width changes re-shift from originals (desktop rule back, clone follows, orientation back)',
+      mq.desk === 'rgb(30, 30, 30)' && mq.ori === 'rgb(10, 10, 10)'
+        && mq.imp === 'rgb(0, 0, 0)' && mq.late === 'rgb(10, 10, 10)', JSON.stringify(mq));
+    await evalIn(sw, `chrome.storage.local.set({ ${JSON.stringify(MQ_KEY)}:`
+      + ' { on: true, left: 300, right: 300, t: Date.now() } })');
+    await until(async () => (await evalIn(mqPage, MQ_SNAP)).brk === 'rgb(20, 20, 20)', 8000,
+      'wide sidebars: breakpoints on again');
+    check('breakpoints follow width changes both ways', true);
+
+    await toggleViaWorker(MQ_URL);
+    mq = await until(async () => {
+      const v = await evalIn(mqPage, MQ_SNAP);
+      return v.ml === '0px' && v.brk === 'rgb(10, 10, 10)' && v.x === 'rgb(10, 10, 10)'
+        ? v : null;
+    }, 8000, 'toggle off restores native breakpoints');
+    check('toggle off: mediaTexts restored verbatim, clones gone, original sheet re-enabled',
+      mq.firstMedia === '(max-width: 1000px)' && mq.clones === 0 && !mq.crossDisabled
+        && mq.desk === 'rgb(30, 30, 30)' && mq.imp === 'rgb(0, 0, 0)',
+      JSON.stringify(mq));
+
+    // The setting: off = squeeze without shifting; flipping it on mid-
+    // session starts the shifter live.
+    await settingsSet({ theme: 'light', defaultLeft: 300, defaultRight: 300, responsive: false });
+    await sleep(300); // let the settings write reach the content script
+    await toggleViaWorker(MQ_URL);
+    await until(async () => (await evalIn(mqPage, MQ_SNAP)).ml === '300px', 4000,
+      'squeeze applied with the shifter off');
+    await sleep(700); // a shift would have landed well within this
+    mq = await evalIn(mqPage, MQ_SNAP);
+    check('responsive:false squeezes without touching breakpoints',
+      mq.brk === 'rgb(10, 10, 10)' && mq.clones === 0 && !mq.crossDisabled,
+      JSON.stringify(mq));
+    await settingsSet({ theme: 'light', defaultLeft: 300, defaultRight: 300, responsive: true });
+    await until(async () => (await evalIn(mqPage, MQ_SNAP)).brk === 'rgb(20, 20, 20)', 6000,
+      'flipping the setting on starts the shifter live');
+    check('responsive:true mid-session starts shifting live', true);
+    await toggleViaWorker(MQ_URL);
+    await until(async () => (await evalIn(mqPage, MQ_SNAP)).ml === '0px', 4000, 'mq page off');
+    // Restore what the orphan section below expects (200/200 defaults).
+    await settingsSet({ theme: 'light', defaultLeft: 200, defaultRight: 200 });
 
     // ---------- extension reload orphans the content script ----------
     // Reloading (or updating) the extension kills chrome.* in already-open

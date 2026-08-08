@@ -9,7 +9,8 @@
 <body>
 <main>
   <div class="spec-strip">
-    <span>MODIFY</span><span>EXTENSION</span><span>SETTINGS</span><span>HERE</span>
+    <button id="openFeedback" type="button" class="linkish">SUBMIT A FEEDBACK →</button>
+    <button id="openCoffee" type="button" class="linkish">BUY ME A COFFEE →</button>
     <button id="openReview" type="button" class="linkish">LEAVE A REVIEW →</button>
   </div>
 
@@ -43,6 +44,10 @@
       <label class="readout">
         <input type="checkbox" id="showReadout">
         <span class="box" aria-hidden="true"></span> PIXEL READOUT WHILE RESIZING
+      </label>
+      <label class="readout">
+        <input type="checkbox" id="responsive">
+        <span class="box" aria-hidden="true"></span> TRIGGER SITE BREAKPOINTS — PAGES ADAPT AS IF THE WINDOW SHRANK
       </label>
     </section>
 
@@ -94,7 +99,8 @@
         <div class="sec-label">03 — PER-URL DEFAULTS<br>FIRST MATCH WINS</div>
       </div>
       <p class="rules-note">PAGES MATCHING A PATTERN GET THESE DEFAULTS.
-      ORDER MATTERS. RESIZED PAGES KEEP THEIR SAVED WIDTHS.
+      ORDER MATTERS. "NEW" MEANS A PAGE YOU HAVE NOT TOUCHED YET — ONCE YOU
+      RESIZE OR TOGGLE ONE, IT KEEPS ITS OWN STATE AND THE RULE STOPS DECIDING.
       (TRAILING <span class="hint" tabindex="0"
         aria-describedby="hashTip">#HASH<span class="hint-tip" id="hashTip"
         role="tooltip">Some URLs end with "#something", like
@@ -104,7 +110,7 @@
         easier to write. </span></span> IS CLIPPED FROM MATCHING)</p>
       <div class="rules-table">
         <div class="rules-head" aria-hidden="true">
-          <span>MATCH BY</span><span>URL PATTERN</span><span>LEFT</span><span>RIGHT</span><span class="ord">ORD</span>
+          <span>MATCH BY</span><span>URL PATTERN</span><span>NEW PAGE BEHAVIOR</span><span>LEFT</span><span>RIGHT</span><span class="ord">ORD</span>
         </div>
         <div id="rules"></div>
         <button id="addRule" type="button">+ ADD RULE</button>
@@ -149,6 +155,7 @@
      the options page loads them itself (manifest order) and gets live,
      adjustable pillars like any other page. options.js seeds the record. -->
 <script src="../content/squeeze.js"></script>
+<script src="../content/media-queries.js"></script>
 <script src="../content/fixed-bars.js"></script>
 <script src="../content/panels.js"></script>
 <script src="../content/index.js"></script>

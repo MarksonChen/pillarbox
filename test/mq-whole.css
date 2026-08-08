@@ -1,0 +1,3 @@
+/* Applied only while the <link media="(max-width: 1000px)"> gate matches;
+   mq.html / e2e.mjs assert the gate re-evaluates under the squeeze. */
+#whole { color: rgb(80, 80, 80); }
