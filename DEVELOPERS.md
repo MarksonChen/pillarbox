@@ -182,16 +182,26 @@ the OS temp dir).
 
 ## Icons
 
-`tools/icon-source.png` is the master art — square, black on transparent — kept
-in `tools/` rather than `icons/` so it reads as build input rather than a
-shipped asset (nothing excludes it from a zip; leave it out when packaging).
-Regenerate the four sizes with:
+`tools/icon-source.png` is the master art — a square canvas holding a white
+rounded card with the mark on it — kept in `tools/` rather than `icons/` so it
+reads as build input rather than a shipped asset (nothing excludes it from a
+zip; leave it out when packaging). Regenerate the four sizes with:
 
 ```sh
 tools/make_icons.sh tools/icon-source.png
 ```
 
-The mark is black-only, so it reads well on Chrome's light toolbar and goes
-low-contrast on a dark one. Chrome does not invert `action.default_icon` PNGs,
-so a dark-toolbar variant would have to be a second set of files swapped at
-runtime via `chrome.action.setIcon`.
+The card is what makes the icon legible on a dark toolbar as well as a light
+one, and that matters because there is no declarative fix available: Chrome has
+no manifest key for light/dark icon variants, and `chrome.action.setIcon` only
+reaches the toolbar, never the `icons` used by `chrome://extensions` and the
+Web Store. Swapping at runtime would also mean an offscreen document
+(`MATCH_MEDIA` reason) just to reach `matchMedia` from the worker. A mark that
+carries its own background sidesteps all of it.
+
+Keep the canvas square. Chrome renders action icons in a square 16-DIP slot and
+warns that a non-square image may be distorted, so a wider-than-tall drawing
+has to be padded with transparent pixels — evenly, or the mark sits visibly
+off-centre. `sips` cannot pad with transparency (`--padColor` takes an opaque
+hex), so that step means compositing into a zero-filled RGBA buffer rather than
+a one-liner.

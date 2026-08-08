@@ -1,8 +1,8 @@
 /* "Tower" — a brutalist ink-on-paper poster. The layout is designed on a
    1440px canvas; --u is the scale unit (1px at >=1440, proportionally less
    below), applied to the display type so the poster shrinks as one piece.
-   Small mono text and rules keep their fixed sizes. Dark theme is a plain
-   ink/paper swap. */
+   Small mono text and rules keep their fixed sizes. Dark theme is the same
+   ink/paper swap, softened one notch (see below). */
 :root {
   color-scheme: light;
   --ink: #000000;
@@ -13,9 +13,12 @@
   --u: calc(min(100cqw, 1440px) / 1440);
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
+/* Not a pure swap: the ink comes back as a soft gray rather than white, so
+   the display type stops glaring off a black field at night. Paper stays
+   fully black — the poster's inverted bands need somewhere to invert to. */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --ink: #ffffff;
+  --ink: #e9e9e9;
   --paper: #000000;
   --alert: #ff5c5c;
 }

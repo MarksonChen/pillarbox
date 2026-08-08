@@ -1,32 +1,32 @@
 # Pillarbox
 
-A Chrome extension that squeezes a page's content inward between two empty,
-resizable sidebars — for sites that put their text hard-left, hard-right, or
-stretched across the whole window.
+A Chrome extension that squeezes a page's content left/right/inward using two resizable sidebars.
 
-The page genuinely **reflows** into the narrower column. The sidebars are not
-an overlay sitting on top of the text.
+(Video)
 
-## Install
+## Install From Source
 
 1. Open `chrome://extensions` and turn on **Developer mode** (top right).
 2. Click **Load unpacked** and pick this folder.
 3. Pin the icon, then click it on any page.
 
-## Use
+## Gestures
+
+(Video)
 
 | To do this | Do that |
 | --- | --- |
-| Turn the sidebars on or off | Click the toolbar icon, or press `Alt+Shift+S` |
-| Bring both collapsed sides back | Click the toolbar icon (it revives rather than toggling off) |
-| Resize one side | Drag its inner edge |
-| Resize both at once | Hold any modifier key (⇧ ⌃ ⌥ ⌘) and drag |
+| Turn the sidebars on or off | Click the toolbar icon, or press your custom shortcut |
+| Resize one side | Drag the sidebar edge |
+| Resize both sides at once     | Hold any modifier key (⇧ ⌃ ⌥ ⌘) and drag              |
 | Collapse one side | Double-click it |
-| Bring a collapsed side back | Double-click its sliver at the screen edge |
+| Bring a collapsed side back | Drag from the page edge or double-click the edge |
 | Return to your default widths | Hold a modifier and double-click a sidebar |
+|  |  |
 
-One sidebar can go past the middle when the other is narrow. The only limit is
-that 200px of page always stays visible between them.
+
+
+
 
 ## What it remembers
 
