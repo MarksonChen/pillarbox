@@ -75,6 +75,17 @@ SQZ.fixedBars ??= (() => {
     return true;
   }
 
+  // Is this computed min-width effectively "as wide as the viewport"?
+  // getComputedStyle does not resolve min-width to px, so a percentage
+  // arrives verbatim — and for a viewport-anchored box, 100% IS the viewport,
+  // the same intent spelled differently. (Only asked about inset boxes: in
+  // normal flow a percentage resolves against the already-squeezed parent.)
+  function viewportSizedMin(minWidth, vw) {
+    return minWidth.endsWith('%')
+      ? parseFloat(minWidth) >= FULL_WIDTH_RATIO * 100
+      : parseFloat(minWidth) >= vw * FULL_WIDTH_RATIO;
+  }
+
   // Decide how to adopt an element; null leaves it alone. Candidates must
   // span >= 90% of the viewport AND visibly escape the squeeze (margins are
   // applied before any scan runs, so properly reflowed content — and
@@ -96,9 +107,7 @@ SQZ.fixedBars ??= (() => {
       // A viewport-sized min-width outlives our left/right: the box keeps its
       // full width and merely shifts right by the left inset, tail off the
       // screen. Defuse it exactly as the flow branch does below.
-      const want = parseFloat(cs.minWidth) >= vw * FULL_WIDTH_RATIO
-        ? { 'min-width': '0px' }
-        : {};
+      const want = viewportSizedMin(cs.minWidth, vw) ? { 'min-width': '0px' } : {};
       return { mode: 'inset', want };
     }
     // Normal flow. Width overrides only make sense on HTML block-level boxes.
@@ -144,12 +153,35 @@ SQZ.fixedBars ??= (() => {
       };
     }
     managed.set(el, entry);
-    assertOne(el, entry);
+    if (entry.mode !== 'flow') {
+      assertOne(el, entry);
+      return;
+    }
     // Flow overrides are a guess: the box may be wide for reasons width
     // can't fix (a table sized by unbreakable content, say). Verify, and
     // back out of adoptions that changed nothing.
-    if (entry.mode === 'flow'
-        && escapes(el.getBoundingClientRect(), SQZ.viewportWidth())) {
+    //
+    // The verify reads the rect synchronously, so anything TRANSITIONING the
+    // properties we just wrote would still measure at the old value and look
+    // unfixable: `transition: all .3s` on a header is commonplace, and the
+    // full-bleed and min-width defuses are numeric->numeric, so they really
+    // do animate (width:100vw -> auto cannot). Since a rejection lasts for
+    // the rest of this run, that would strand a header we could have fixed
+    // under the panels. Suppress transitions across the measurement; putting
+    // the property back afterwards animates nothing, because no value
+    // changes at that point.
+    const priorTransition = {
+      value: el.style.getPropertyValue('transition'),
+      priority: el.style.getPropertyPriority('transition'),
+    };
+    el.style.setProperty('transition', 'none', 'important');
+    assertOne(el, entry);
+    const stillEscapes = escapes(el.getBoundingClientRect(), SQZ.viewportWidth());
+    el.style.removeProperty('transition');
+    if (priorTransition.value) {
+      el.style.setProperty('transition', priorTransition.value, priorTransition.priority);
+    }
+    if (stillEscapes) {
       release(el);
       rejected.add(el);
     }
@@ -193,6 +225,18 @@ SQZ.fixedBars ??= (() => {
     try { pos = getComputedStyle(el).position; } catch {}
     const mode = pos ? modeOf(pos) : null;
     if (mode === entry.mode) {
+      // Same category, but fixed and absolute SHARE it, and only absolute
+      // boxes are captured by a merely positioned ancestor. A bar that docks
+      // itself by swapping fixed for absolute (the ordinary scroll-dock class
+      // toggle) has therefore just changed its answer to the anchoring
+      // question — and it is the one mutation neither this function nor
+      // recheckAnchors (which only looks under a CHANGED ancestor) would
+      // otherwise re-ask. Left adopted, its viewport insets would resolve
+      // against the already-squeezed ancestor and squeeze it twice.
+      if (entry.mode === 'inset' && !anchoredToViewport(el, pos)) {
+        release(el); // the ancestor is squeezed, so the box lands squeezed once
+        return;
+      }
       assertOne(el, entry); // page rewrote its inline style: re-assert
     } else {
       release(el);
@@ -291,6 +335,13 @@ SQZ.fixedBars ??= (() => {
     let attrTargets = null;
     for (const m of mutations) {
       if (m.type === 'attributes') {
+        // The squeeze rewrites html's inline style on every drag frame, and
+        // there is nothing here for us in that: classify() refuses the root,
+        // anchoredToViewport() stops AT the root so no release can follow
+        // from it, and markDirty(root) queues the WHOLE document for
+        // classification every 300ms for as long as the drag lasts. Class
+        // changes on <html> still flow through — those do reveal descendants.
+        if (m.target === document.documentElement && m.attributeName === 'style') continue;
         reconsider(m.target);
         (attrTargets ??= new Set()).add(m.target);
         // Leaves have no descendants to reveal — the common case for the
@@ -333,7 +384,13 @@ SQZ.fixedBars ??= (() => {
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: ['class', 'style'],
+      // `hidden` earns its place next to the two style carriers: an element
+      // already in the DOM that is revealed by clearing it (banners, cookie
+      // bars) produces no class, style or childList mutation anywhere, so
+      // nothing else would ever look at it. Other state attributes that CSS
+      // can key on (data-state, aria-expanded) are deliberately left out —
+      // they churn constantly on component-library pages.
+      attributeFilter: ['class', 'style', 'hidden'],
     });
   }
 

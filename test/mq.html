@@ -38,6 +38,39 @@
 <!-- Later same-origin sheet: must keep beating the cross-origin clone
      (cascade order), exactly as it beats the original. -->
 <style id="afterCss">#xover { color: rgb(200, 100, 0); }</style>
+<!-- Two cross-origin @imports in ONE readable sheet: both clones anchor to
+     this <style>, and ord-a is served slowly, so clones inserted when their
+     fetch lands would arrive in the wrong order and invert the cascade
+     between them. Native answer: ord-b wins, being the later import. -->
+<style id="ordImports">
+  @import url("http://127.0.0.1:8124/ord-a.css");
+  @import url("http://127.0.0.1:8124/ord-b.css");
+</style>
+<!-- An unlayered rule BEFORE the layered import: unlayered always beats
+     layered, so #lay must stay grey(120) whatever the clone does. A clone
+     that dropped the layer() condition would be unlayered AND later in the
+     document than this rule, and would win instead. -->
+<style id="earlyLayer">#lay { color: rgb(120, 120, 120); }</style>
+<style id="layerImporter">@import url("http://127.0.0.1:8124/layered.css") layer(base);</style>
+<script>
+  // JS-breakpoint harness for the MAIN-world matchMedia hook: lists minted
+  // at load (long before any squeeze), listened through all three APIs —
+  // legacy addListener is the one YouTube's iron-media-query actually uses.
+  window.__mm = (() => {
+    const q = matchMedia('(min-width: 1016px)'); // YouTube's two-column gate
+    const ori = matchMedia('(orientation: landscape)');
+    const dark = matchMedia('(prefers-color-scheme: dark)'); // must stay native
+    const events = [];
+    q.addListener((e) => events.push(['legacy', e.matches, e.isTrusted]));
+    q.onchange = (e) => events.push(['onchange', e.matches, e.isTrusted]);
+    q.addEventListener('change', (e) => events.push(['ael', e.matches, e.isTrusted]));
+    // Shift changes must poke resize-driven layouts (YouTube's player); a
+    // page at rest must never hear a synthetic resize.
+    let rz = 0;
+    addEventListener('resize', () => { rz += 1; });
+    return { q, ori, dark, events, get rz() { return rz; } };
+  })();
+</script>
 </head>
 <body>
   <div id="brk">brk — classic max-width breakpoint</div>
@@ -51,5 +84,7 @@
   <div id="imp">imp — @import inside the cross-origin sheet</div>
   <div id="xover">xover — later same-origin sheet must win</div>
   <div id="bgprobe">bgprobe — relative url() in the cross-origin sheet</div>
+  <div id="ord">ord — two cross-origin imports, later one must win</div>
+  <div id="lay">lay — layered cross-origin import must stay inside its layer</div>
 </body>
 </html>

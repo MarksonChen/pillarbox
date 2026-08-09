@@ -110,6 +110,55 @@
   }
   body.revealed #ancestorBar { display: flex; }
 
+  /* Revealed by clearing the `hidden` ATTRIBUTE — no class, no style, no
+     childList mutation anywhere, so only an attributeFilter that includes
+     `hidden` can ever find it. */
+  #hiddenBar {
+    position: fixed;
+    top: 150px;
+    left: 0;
+    right: 0;
+    height: 24px;
+    background: #059669;
+    color: #fff;
+    display: flex;
+    justify-content: space-between;
+    padding: 0 12px;
+    box-sizing: border-box;
+    z-index: 91;
+  }
+
+  /* min-width in PERCENT: for a viewport-anchored box 100% is the viewport,
+     the same intent as a px value, and it outlives left/right insets just as
+     stubbornly. getComputedStyle hands it back as "100%". */
+  #minPctBar {
+    position: fixed;
+    top: 100px;
+    left: 0;
+    right: 0;
+    min-width: 100%;
+    height: 24px;
+    background: #4338ca;
+    color: #fff;
+    z-index: 94;
+  }
+
+  /* Docks itself by swapping fixed -> absolute inside a positioned wrapper:
+     the anchoring answer changes with nothing but its own class moving, the
+     one mutation the ancestor-driven recheck cannot see. */
+  #dockWrap { position: relative; height: 60px; }
+  #dockBar {
+    position: fixed;
+    top: 200px;
+    left: 0;
+    right: 0;
+    height: 28px;
+    background: #b45309;
+    color: #fff;
+    z-index: 93;
+  }
+  #dockBar.docked { position: absolute; top: 0; }
+
   /* Manual check for the breakpoint shifter: red + "WIDE" natively at a
      desktop window; green + "NARROW" once the squeeze brings the effective
      width under 1000px. Color/content only — the e2e geometry assertions on
@@ -135,15 +184,20 @@
     <div id="hero">100vw full-bleed hero (adopted: squeezed to the page width)</div>
     <div id="mqDemo">1000px breakpoint</div>
     <div id="morphBar">morphing bar — becomes <code>position:fixed</code> via class change</div>
+    <div id="dockWrap"><div id="dockBar">scroll-dock bar (fixed → absolute)</div></div>
     <div class="controls">
       <button id="addBar">Add late fixed bar</button>
       <button id="morphNow">Morph bar to fixed now</button>
       <button id="revealNow">Reveal ancestor-class footer</button>
+      <button id="revealHidden">Un-hide the hidden bar</button>
+      <button id="dockNow">Dock bar (fixed → absolute)</button>
     </div>
     <div id="content"></div>
   </main>
   <div id="fab">💬</div>
   <div id="ancestorBar"><span>L-EDGE</span><span>ancestor-revealed footer</span><span>R-EDGE</span></div>
+  <div id="minPctBar">min-width:100% fixed bar</div>
+  <div id="hiddenBar" hidden><span>L-EDGE</span><span>hidden-attribute bar</span><span>R-EDGE</span></div>
   <script>
     const content = document.getElementById('content');
     for (let i = 1; i <= 40; i++) {
@@ -172,8 +226,16 @@
     document.getElementById('revealNow').addEventListener('click', () => {
       document.body.classList.add('revealed');
     });
-    // Auto-fire once, for manual testing convenience.
-    setTimeout(addLateBar, 2000);
+    document.getElementById('revealHidden').addEventListener('click', () => {
+      document.getElementById('hiddenBar').hidden = false;
+    });
+    document.getElementById('dockNow').addEventListener('click', () => {
+      document.getElementById('dockBar').classList.add('docked');
+    });
+    // Auto-fire once, for manual testing convenience — but never on the
+    // orphan run, where the e2e needs its own style poke to be provably the
+    // FIRST thing that wakes the orphaned script.
+    if (!location.search.includes('orphan')) setTimeout(addLateBar, 2000);
   </script>
 </body>
 </html>

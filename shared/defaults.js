@@ -13,10 +13,9 @@ SQZ.DEFAULT_SETTINGS = Object.freeze({
   colorLight: '#eef0f3',    // panel color when the light theme is active
   colorDark: '#1d2126',     // panel color when the dark theme is active
   showReadout: false,       // px readout bubble while dragging a handle
-  responsive: true,         // shift the page's width breakpoints by the
-                            // panels' total width, so sites switch to the
-                            // narrow layout they would use in a window of
-                            // the squeezed size (media-queries.js)
+  jsBreakpoints: true,      // window.matchMedia sees the squeeze too (the
+                            // MAIN-world hook; what makes YouTube reflow).
+                            // The escape hatch if a site's scripts misbehave.
   // Per-URL defaults, first match wins. These three ship as defaults; they
   // are ordinary rules in the options page — edit or remove freely (the
   // first save persists the list wholesale, so removal sticks). Two double
@@ -56,11 +55,21 @@ SQZ.MSG = Object.freeze({
 // open when the extension was installed or reloaded.
 SQZ.CONTENT_FILES = Object.freeze([
   'shared/defaults.js',
+  'shared/mq-shift.js',
   'content/squeeze.js',
   'content/media-queries.js',
   'content/fixed-bars.js',
   'content/panels.js',
   'content/index.js',
+]);
+
+// Must mirror manifest.json content_scripts[1].js exactly: the shared shift
+// transform plus the MAIN-world matchMedia hook it feeds. background.js
+// injects this pair (world MAIN) into pre-existing tabs BEFORE the isolated
+// files, so the first shift announcement finds its listener.
+SQZ.MAIN_WORLD_FILES = Object.freeze([
+  'shared/mq-shift.js',
+  'content/match-media.js',
 ]);
 
 // Memory is per PAGE: origin + path + query. The hash is ignored (in-page
@@ -83,6 +92,12 @@ SQZ.mergeSettings = (raw) => ({ ...SQZ.DEFAULT_SETTINGS, ...(raw ?? {}) });
 // event at all, so a pending-write counter would leak and swallow the next
 // genuine remote change. Used by the content script (page records) and the
 // options page (settings).
+//
+// Content matching narrows that hazard rather than removing it: the stamp of
+// a no-op write is never consumed either, and it would match a later remote
+// change that happens to land on exactly that value. Callers are expected to
+// not make no-op writes — page records always carry a fresh `t`, and the
+// options page compares against the last known stored JSON before writing.
 SQZ.makeEchoes = () => {
   const stamps = new Set();
   return {

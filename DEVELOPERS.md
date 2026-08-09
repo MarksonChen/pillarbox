@@ -8,16 +8,18 @@ user's point of view, see [README.md](README.md).
 
 ```
 manifest.json          extension wiring
-background.js          service worker: icon click -> toggle message (+ inject fallback), zoom relay, cross-origin CSS fetch
+background.js          service worker: icon click -> toggle message (+ inject fallback), zoom relay, cross-origin CSS fetch (private-network guarded)
 shared/defaults.js     constants shared by all contexts
+shared/mq-shift.js     the width-shift text transform, loaded by BOTH worlds
 content/squeeze.js     html-margin reflow + style watcher
 content/media-queries.js  breakpoint shifter (width media features see the squeezed width)
+content/match-media.js MAIN-world matchMedia hook (JS breakpoints see it too)
 content/fixed-bars.js  escaping-element manager (fixed bars, vw-unit shells)
 content/panels.js      shadow-DOM panels + drag handles
 content/index.js       per-page state machine, storage, lifecycle
 options/               options page
 tools/make_icons.sh    regenerate icons/ from tools/icon-source.png (macOS sips)
-test/                  test pages + end-to-end script
+test/                  test pages (page, mq, csp, appshell, vwshell, quirks) + end-to-end script
 ```
 
 `shared/defaults.js` is loaded by every context — content scripts (first file
@@ -28,10 +30,10 @@ through `chrome.scripting.executeScript` is harmless.
 ## State
 
 - `chrome.storage.sync['settings']` — `{theme, defaultLeft, defaultRight,
-  colorLight, colorDark, showReadout, responsive, rules}`. `responsive`
-  (absent means `true`) is the breakpoint shifter's switch — checked as
-  `!== false`, so settings saved before it existed get the new behaviour.
-  `rules` is an ordered list of
+  colorLight, colorDark, showReadout, jsBreakpoints, rules}`. `jsBreakpoints`
+  gates the MAIN-world matchMedia hook (absent means `true` — the same
+  normalize-don't-migrate convention as the rule fields). `rules` is an
+  ordered list of
   `{pattern, mode, autoShow, left, right}`; the first match wins. `mode` is
   `'regex'` or `'substring'`, and **absent means `'regex'`**; `autoShow` opens
   the pillars on a matching page that has no record of its own, and **absent
@@ -71,12 +73,24 @@ custom elements as an anti-flicker guard (reddit's
 viewport, and `position:absolute` boxes with no positioned ancestor (SPA app
 shells like claude.ai's `absolute inset-0` root) are anchored to the initial
 containing block — both ignore the html margins. Elements of either kind that
-span ≥ 90% of the viewport and visibly escape the squeeze (absolute ones must
-additionally have no positioned or transformed ancestor) get inline
-`left/right` insets to match. A `MutationObserver` catches bars added later or
+span ≥ 90% of the viewport and visibly escape the squeeze get inline
+`left/right` insets to match. Neither kind may sit under a
+transformed/filtered/contained ancestor — that re-anchors even fixed boxes —
+and absolute ones additionally not under a merely positioned one; a box that
+loses its anchoring later (an ancestor gaining a transform, or the box itself
+swapping `fixed` for `absolute` the way scroll-docking headers do) is released
+rather than squeezed twice. A `MutationObserver` catches bars added later or
 turned fixed by a class change; because a class on an *ancestor* can reveal a
 bar without touching the bar itself (`body.scrolled .footer`), a mutated
-element's subtree is also re-examined, coalesced on a 300 ms timer. Everything
+element's subtree is also re-examined, coalesced on a 300 ms timer. It watches
+`class`, `style` and `hidden` (clearing `hidden` reveals a bar without
+producing any other mutation anywhere), but skips inline-`style` writes on
+`<html>` — that is the squeeze's own every-frame write during a drag, and
+acting on it queues the whole document for classification three times a
+second. Flow adoptions are verified by re-measuring, with transitions
+suppressed for the measurement: the margin and min-width overrides animate on
+any header carrying `transition: all`, and a rect read mid-transition would
+report the box as unfixable and blacklist it for the rest of the run. Everything
 is restored exactly on toggle-off. Squeezing a shell also narrows any iframe inside it, so framed
 content (artifact viewers and the like) reflows like a window resize.
 
@@ -90,8 +104,8 @@ content cannot be fixed by width overrides.
 
 **Breakpoints.** Media queries evaluate against the window, not the squeezed
 content, so a site that would switch to its narrow layout in a smaller
-window instead keeps a desktop layout that no longer fits. With the
-`responsive` setting on (the default), every width feature in every
+window instead keeps a desktop layout that no longer fits. While squeezed,
+every width feature in every
 reachable stylesheet is shifted by the panels' total width S: a breakpoint W
 becomes `calc(W + Spx)` — the same shift for min/max/plain width and both
 ends of range syntax, and calc() keeps em-unit breakpoints exact without
@@ -108,24 +122,148 @@ shifted text) and toggle-off restores verbatim.
 
 Cross-origin sheets guard `cssRules` with a SecurityError, and content
 scripts cannot fetch them either (page CORS applies) — the worker can (host
-permission), so opaque sheets are fetched there, `@import` chains inlined
+permission). That reach is the reason the relay carries a private-network
+guard: the fetched body lands in a `<style>` clone inside the page's own DOM,
+so without one, a page the extension is active on could name an address only
+the browser's host can reach (a router page, a metadata endpoint) and read the
+answer back out. A private target is allowed only when the asking page is
+itself on a private address — `sender.origin` is set by the browser, not the
+page — which keeps localhost dev sites and intranet apps working. Opaque
+sheets are fetched there, `@import` chains inlined
 (depth 3, cycle- and byte-capped, conditions rewritten as equivalent
 `@layer`/`@supports`/`@media` wrappers) and `url()`s absolutized against the
 sheet's own URL (a clone parses at the document base). The text is replayed
 in a `<style>` clone inserted at the owner `<link>` — content-script-
-inserted `<style>` bypasses page CSP, and the position keeps cascade order,
-which `document.adoptedStyleSheets` would not (adopted sheets sort after
-every document sheet and would beat later overrides). The original is turned
-off via `sheet.disabled` — the CSSOM flag, NOT `link.disabled`, whose
-attribute round-trip re-fetches the sheet asynchronously and leaves the page
-unstyled for a moment on restore. Sheets added later are caught by a
-childList observer; rules added through `insertRule` (styled-components)
-mutate no DOM node, so a 2s rule-count poll covers those. A media flip can
+inserted `<style>` bypasses page CSP (Chrome behaviour rather than documented
+contract, which is why the CSP e2e pins it), and the position keeps cascade
+order, which `document.adoptedStyleSheets` would not (adopted sheets sort
+after every document sheet and would beat later overrides). The clone element
+goes in EMPTY and synchronously, during the walk, and is filled when the
+fetch lands: several cross-origin `@import`s of one readable sheet share an
+anchor, so inserting on completion would order them by download speed and
+invert the cascade between them. An `@import`'s own `layer()`/`supports()`
+conditions are wrapped around the clone's text (the media condition rides its
+`media` attribute) — dropping them would float the rules out of their cascade
+layer, where unlayered beats layered. The original is turned off via
+`sheet.disabled` — the CSSOM flag, NOT `link.disabled`, whose attribute
+round-trip re-fetches the sheet asynchronously and leaves the page unstyled
+for a moment on restore — and only once the clone actually holds its text.
+Upkeep drops a clone when its anchor leaves the document OR stops owning the
+sheet we cloned (an `href` swap mints a new `CSSStyleSheet`; `link.disabled`
+detaches it), and it runs even at shift 0, where the clones are deliberately
+kept alive and a `<link>` removal would otherwise leave the page wearing a
+stylesheet it had just unloaded. Sheets added later are caught by a childList
+observer; rules added through `insertRule` (styled-components) mutate no DOM
+node, so a 2s rule-count poll covers those. A media flip can
 restyle a bar without touching any attribute — invisible to the fixed-bar
 observer — so every shift application nudges `fixedBars.update()`, whose
 debounced rescan re-adopts whatever the new layout revealed. Printing runs
 `stop()` first: print media evaluates width against the paper size, and a
 shifted breakpoint would corrupt the printout.
+
+**JavaScript breakpoints.** Stylesheets are only half of how sites read the
+viewport: apps also ask `window.matchMedia` — YouTube's entire layout
+switching (`ytd-watch-flexy`'s two-column flag, the masthead, all of it)
+hangs off Polymer `iron-media-query` elements wrapping exactly that call,
+which is why YouTube used to keep its desktop layout under any squeeze. No
+isolated-world edit can change what `matchMedia` reports, so a second
+manifest entry runs `shared/mq-shift.js` + `content/match-media.js` in the
+**MAIN world** at `document_start` on every page (`minimum_chrome_version`
+111 for manifest `world`). The wrapper returns the *genuine* native
+`MediaQueryList` — `instanceof`, `.media` text and every listener API stay
+native — and keeps a WeakRef ledger of each width-flavored list it hands
+out. While squeezed, every ledger entry gets a hidden **shadow list** for
+the shifted query text: the patched prototype `matches` getters (list and
+event) answer from the shadow, a shadow flip dispatches a synthetic change
+event on the page's list (`dispatchEvent` reaches `addEventListener`,
+`onchange` and legacy `addListener` alike — the last one is what
+`iron-media-query` uses), and native events still firing at the un-shifted
+thresholds carry corrected values through the same event getter. Shadows are
+native lists, so window resizes fire them without any relay of ours — and
+because a native `MediaQueryList` carrying a listener lives as long as the
+document, they are also held in a strong, iterable set beside the WeakMap and
+released through a `FinalizationRegistry` when their page list is collected.
+Without that, the everyday one-shot idiom
+(`matchMedia('(max-width: 768px)').matches` inside a helper) would strand a
+shadow per call for the whole squeezed session.
+
+At shift 0 the getters pass through and no shadow — and so no listener of
+ours on any page object — exists. What is installed unconditionally on every
+page is five patches: the wrapped `matchMedia`, the two `matches` accessors,
+the two width-metric accessors, and one window listener for the announcement
+event. Their behaviour at rest is native to the value; a page that looks can
+still tell they were replaced, so the injection marker is deliberately not
+named after the extension.
+
+The two worlds share one transform: `shared/mq-shift.js` is loaded by both
+manifest entries and hangs off its own deletable global (`var` would be
+undeletable; SQZ could collide with page code) which `match-media.js`
+consumes and deletes before any page script runs. Note that the CSP
+exemptions the isolated world enjoys do NOT extend here — the docs are
+explicit that a main-world content script runs under the page's CSP — so this
+file stays CSP-neutral by construction: native calls and `defineProperty`
+only, no `eval`, no injected nodes. The isolated side
+announces the shift total over a `pillarbox-mq-shift` CustomEvent with a
+primitive detail (primitives cross worlds), in the same coalesced flush as
+the CSS edits so both flip together; a same-value re-announcement after a
+resize re-bakes the orientation/aspect substitutions. Print suspension and
+toggle-off announce 0. Each shift CHANGE additionally dispatches synthetic
+window `resize` events — matchMedia covers the sites that ask breakpoint
+questions, the pokes cover the ones that re-measure in resize handlers.
+Natively these breakpoints can only ever flip DURING a real resize, a
+stream of events that outlasts every late relayout, so app pipelines
+legitimately lean on "another resize will come": YouTube narrows its watch
+column from a low-priority job seconds after the flip, and only the next
+resize re-centers the `<video>` (verified live; a poke alone repairs it).
+The hook honors that contract: poke immediately, then for a ~10s watch
+window re-check a cheap geometry fingerprint every 500ms, poking again
+whenever the page moved since the last look. Two hard-won constraints,
+both found on YouTube: the cadence must exceed fixed-bars' 300ms rescan
+debounce, which every poke re-arms through the isolated world's own resize
+listener (a faster stream postpones the very shell adoption it waits for),
+and the fingerprint must live on `<body>` scroll metrics — the root
+element's client/scroll widths are viewport-based and blind to content
+narrowing back inside the margins. Same-S re-announcements never poke:
+they follow a real resize the page already heard. The hook is page-lifetime and survives extension
+reloads — the stale-artifact pass announces an explicit 0 in case the
+orphaned world never wakes to do it itself. The toolbar-click fallback
+injects the pair (`world: 'MAIN'`) before the isolated files so the first
+announcement finds a listener, but that late injection cannot retrofit
+lists the page already minted through the native `matchMedia` — such tabs
+reflow fully only after their next reload. Gated by the `jsBreakpoints`
+setting (default on; `mediaQueries.setJsHooks` flips it live).
+
+While squeezed, the width METRICS lie as well: `window.innerWidth` and the
+viewport `clientWidth` answer minus the shift. Breakpoint questions turned
+out not to be enough — sizing math measures the viewport in px, and YouTube
+does it the Closure-library way (`goog.dom.getViewportSize`; verified live —
+the watch player takes its dimensions from a cached size of exactly those
+metrics, so after the single-column flip it froze at the size computed for
+the real window, and spoofing `innerWidth` alone changed nothing). Both
+metrics shift by the same amount, so scrollbar arithmetic
+(`innerWidth - clientWidth`) stays exact.
+
+WHICH element's `clientWidth` means the viewport is mode-dependent (CSSOM
+View): the root in standards mode, `<body>` in quirks — where the root
+reports its own padding box, which the squeeze margins have ALREADY narrowed,
+so lying there too would subtract the shift twice (`SQZ.viewportWidth()`
+draws the same distinction on the isolated side, and `test/quirks.html` pins
+it). The lie is therefore an own property on whichever element currently
+carries that meaning, re-verified on every shift application because an own
+property does not survive its element being replaced — `document.write()` and
+`replaceChild` both do that, and in quirks `<body>` may not exist yet at
+`document_start`. The getter re-checks per read as well, so a mode flip
+cannot leave it lying about a padding box, and it is installed
+non-enumerable so `Object.keys()` on the element still reads native. Every
+other element keeps the untouched prototype getter. The isolated world has
+its own bindings and always sees native values — the extension's clamp
+math depends on that — and the e2e SNAPs derive layout width from the html
+box + margins for the same reason. Residual honesty, by design: heights,
+`visualViewport`, `screen.*` and `outerWidth` keep telling the truth
+(physical/window facts, matching `device-width` staying unshifted in the
+query transform); synthetic events are `isTrusted: false`; a listener that
+ignores every matches value and blindly toggles state reacts to the
+redundant native-threshold events.
 
 **Page zoom.** Zoom scales the CSS px unit itself, so a stored width applied
 verbatim would grow on screen as the user zooms in, squeezing the content
@@ -141,7 +279,10 @@ zoom × display scale and has already moved when the resize event fires, inside
 the rendering update that paints the first zoomed frame — so dividing the old
 dpr out of the new one converts the last authoritative `(zoom, dpr)` pair into
 the exact new factor, applied before that first paint. Zooming is flash-free by
-construction. The service worker then merely confirms (`tabs.getZoom` on
+construction. (The rAF-before-paint ordering is spec'd; that the dpr getter has
+already moved when `resize` fires is observed Chrome behaviour, not a
+documented guarantee — the e2e's "correct in the first zoomed frame" check is
+what pins it, and a misprediction is corrected by the worker anyway.) The service worker then merely confirms (`tabs.getZoom` on
 request, `tabs.onZoomChange` as a push — neither needs a permission) and only
 ever corrects the one case the ratio misreads: a cross-display move, where dpr
 moved but zoom did not. Confirmed non-100% factors are cached per origin, so a
@@ -166,7 +307,12 @@ are additionally stripped by hand in case the old world never runs.
 
 The options page loads the real content scripts itself (Chrome injects none
 into extension pages), so it runs live, adjustable pillars like any other page
-and `options.js` seeds the record on first visit.
+and `options.js` seeds the record on first visit. Its `<script>` list must
+include `shared/mq-shift.js` (media-queries.js depends on it) but must NOT
+include `content/match-media.js`: an extension page has no isolated/main
+world split, so the width-metric lie would feed straight back into the
+extension's own clamp math. The e2e's "options page runs its own live
+pillars" check is the canary for this list drifting.
 
 The poster is designed on a 1440px canvas. `--u` is the scale unit — 1px at
 ≥1440, proportionally less below — and is applied to the display type so the
@@ -192,15 +338,28 @@ Two typographic details are easy to undo by accident:
 
 - Pages with a hard `min-width` show a horizontal scrollbar because the
   content area is genuinely narrower.
-- The breakpoint shifter reaches stylesheets, not scripts: apps that branch
-  on `window.matchMedia` or `window.innerWidth` in JavaScript (some editors,
-  canvas UIs, JS-measured layouts) still see the real viewport; no in-page
-  technique can change what those report. `<picture>`/`srcset` selection
-  also keeps using the real viewport — images may load a size larger than
-  the column they land in, which is cosmetic.
-- Stylesheets inside shadow roots are not shifted (web-components sites), and
-  range-syntax `aspect-ratio` conditions are left alone (colon forms are
-  substituted).
+- The breakpoint shifter reaches stylesheets, `window.matchMedia` and the two
+  width metrics — `window.innerWidth` plus the `clientWidth` of whichever
+  element means the viewport in this document's mode (the MAIN-world hook) —
+  but heights, `visualViewport`, `screen.*` and `outerWidth` stay honest, so a
+  script measuring through those sees the real viewport.
+  `<picture>`/`srcset` selection also keeps using the real viewport — images
+  may load a size larger than the column they land in, which is cosmetic.
+- Tabs that predate the extension load get the matchMedia hook only through
+  the toolbar-click injection — too late to retrofit lists their scripts
+  already made. Those pages reflow fully after their next reload.
+- Stylesheets inside shadow roots are not shifted (web-components sites).
+- A stylesheet served from a private address (`10.x`, `192.168.x`, loopback)
+  keeps its native breakpoints on a public page: the relay refuses that
+  fetch. Same-network pages are unaffected.
+- The settings object lives in one `chrome.storage.sync` item, capped at 8 KB.
+  A rules list that would exceed it is refused with a message rather than
+  silently dropped.
+- While a cross-origin sheet is being stood in for by a clone, our
+  `sheet.disabled` is indistinguishable from the page's own: a script that
+  turns that stylesheet off through the CSSOM sees nothing change (the clone
+  keeps styling) and reads the flag back already true. Inherent to the
+  disable-and-clone design.
 - `100vw` sections narrower than 90% of the viewport, and boxes that are wide
   because of unbreakable content (code blocks, tables), still extend under the
   opaque panels.
@@ -217,9 +376,9 @@ Two typographic details are easy to undo by accident:
 
 Manual: serve the test pages, load the extension unpacked, then click the icon
 on the page and walk the checklist in `test/page.html` — fixed navbar edges
-move inward, sticky reflows, the FAB stays put, late and morphing bars get
-adopted, the 1000px-breakpoint strip turns green/NARROW, print preview is
-clean (and un-triggers the breakpoint).
+move inward, sticky reflows, the FAB stays put, late, morphing,
+hidden-attribute and scroll-dock bars all behave, the 1000px-breakpoint strip
+turns green/NARROW, print preview is clean (and un-triggers the breakpoint).
 
 ```sh
 python3 -m http.server 8080 --directory test
@@ -234,20 +393,44 @@ npx @puppeteer/browsers install chrome@stable --path .cft   # once, ~150 MB
 node test/e2e.mjs
 ```
 
+Every assertion is reported, never thrown: a check whose condition IS a wait
+uses `checkFor()`, which polls until the condition holds and otherwise records
+a FAIL and carries on, and a precondition with no assertion of its own uses
+`waitFor()`, which announces giving up with a `NOTE` line. So one regression
+costs one FAIL (plus whatever genuinely cascades from it, each visible) rather
+than aborting the process and hiding every later result. Only the two
+pre-flight waits — the devtools endpoint and finding the extension's service
+worker — still throw, because nothing can run without them.
+
 The script launches a throwaway headless profile, toggles via the real message
-path, and asserts reflow, fixed-bar insetting, per-page auto-restore after
-reload, zoom-stable widths (correct in the first zoomed frame, hint
+path, and asserts reflow, fixed-bar insetting (including a percentage
+`min-width`, a bar revealed by clearing `hidden`, and a scroll-dock bar
+released when it swaps `fixed` for `absolute`), per-page auto-restore after
+reload, an LRU prune leaving an active page's pillars alone, zoom-stable
+widths (correct in the first zoomed frame, hint
 persistence, zoomed page load), per-URL rules (first-enable widths, rule-aware
 reset, `autoShow` opening a recordless page on load and on an in-page
-navigation, an explicit off outranking the rule, options editor round-trip),
-live settings flips, theming,
+navigation, an explicit off outranking the rule — asserted over a window, not
+sampled once — options editor round-trip),
+live settings flips, theming, the print suspend/resume cycle, a
+back-navigation return, quirks-mode width metrics (`test/quirks.html`: the
+root must NOT be shifted a second time),
 survival of a `style-src 'none'` CSP, and breakpoint shifting (a shiftText
 unit battery plus `test/mq.html` against a second, cross-origin CSS server:
 inline/nested/range/em breakpoints flip, orientation goes portrait, a
-`<link media>` gate re-evaluates without touching the attribute, the
+`<link media>` gate re-evaluates without touching the attribute, sibling
+cross-origin imports keep document order against a deliberately slow one, a
+layered import's clone stays inside its cascade layer, the
 cross-origin clone inlines its `@import`, absolutizes `url()`s and keeps
 cascade order, insertRule-added rules get picked up, updates re-derive from
-originals, and toggle-off restores mediaTexts verbatim). Screenshots go to
+originals, and toggle-off restores mediaTexts verbatim), and the MAIN-world
+matchMedia hook (page-held lists minted before the squeeze flip through
+addListener/onchange/addEventListener with the original media text intact,
+lists minted mid-squeeze are born shifted, orientation tracks the effective
+viewport, the width metrics lie by exactly the shift, the resize poke keeps
+following the page while its geometry moves, the jsBreakpoints kill switch
+un-lies matchMedia live while the CSS shift stays, and toggle-off goes fully
+native). Screenshots go to
 `$SHOT_DIR` (default: the OS temp dir).
 
 ## Icons

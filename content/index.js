@@ -20,7 +20,7 @@ if (!SQZ.booted) {
     let zoomDpr = devicePixelRatio; // the dpr observed when `zoom` was learned
     let zoomConfirmed = false; // an authoritative (worker-sourced) factor arrived
     let zoomConfirm = null;    // in-flight GET_ZOOM round-trip, deduped
-    let zoomHintWritten;       // last value persisted under ZKEY (null = absent)
+    let zoomHintWritten = null; // last value persisted under ZKEY (null = absent)
     let dprMq = null;          // matchMedia probe that fires when the dpr moves
     const ZKEY = SQZ.zoomKey(location.origin);
     let settings = SQZ.mergeSettings(null);
@@ -129,12 +129,37 @@ if (!SQZ.booted) {
       // carry no DOM fingerprint this life could find. The manual strips
       // below stay as belt-and-braces for a world that never got to run.
       dispatchEvent(new Event('resize'));
+      // The MAIN-world matchMedia hook is page-lifetime and survives the
+      // reload; a still-running old world just announced shift 0 during the
+      // poke above, but if that world never woke, this explicit 0 is what
+      // un-lies matchMedia. Harmless when already at rest.
+      const mqEvent = globalThis.__pillarboxMqShift?.EVENT;
+      if (mqEvent) dispatchEvent(new CustomEvent(mqEvent, { detail: 0 }));
       stale.remove();
       const style = document.documentElement.style;
-      // user-select covers a reload that happened mid-drag.
-      for (const prop of ['margin-left', 'margin-right', 'width',
-        'user-select', '-webkit-user-select']) {
-        if (style.getPropertyPriority(prop) === 'important') style.removeProperty(prop);
+      // Priority alone is not a fingerprint. A page may ship its own
+      // `html { margin-left: 0 !important }` inline — and the resize poke
+      // above has just made the orphaned life restore exactly that, value and
+      // priority — so stripping on priority would delete the page's own
+      // declaration, permanently: the fresh squeeze.apply() below snapshots
+      // the stripped state as "prior", and toggle-off never brings it back.
+      // Only strip what squeeze.js writes AS A SET, the same joint-
+      // fingerprint reasoning the fixed-bar loop below uses.
+      const squeezeProps = ['margin-left', 'margin-right', 'width'];
+      const pxValue = /^-?[\d.]+px$/;
+      if (squeezeProps.every((prop) => style.getPropertyPriority(prop) === 'important')
+          && style.getPropertyValue('width') === 'auto'
+          && pxValue.test(style.getPropertyValue('margin-left'))
+          && pxValue.test(style.getPropertyValue('margin-right'))) {
+        for (const prop of squeezeProps) style.removeProperty(prop);
+      }
+      // The drag lock (a reload mid-drag) carries its own fingerprint: the
+      // value is always none, and panels.js is the only writer.
+      for (const prop of ['user-select', '-webkit-user-select']) {
+        if (style.getPropertyValue(prop) === 'none'
+            && style.getPropertyPriority(prop) === 'important') {
+          style.removeProperty(prop);
+        }
       }
       // The previous life's fixed-bar overrides also survive on page
       // elements, and a fresh manager could never re-adopt them: an already
@@ -251,11 +276,15 @@ if (!SQZ.booted) {
       return zoomConfirm;
     }
 
-    // Fires whenever devicePixelRatio changes for any reason. Zoom changes
-    // come with a resize and are predicted there; what this alone catches
-    // is the window moving to a display with a different scale (macOS: no
-    // resize event) — same zoom, new dpr — which must re-anchor the pair so
-    // a later prediction doesn't misread the ratio.
+    // Fires whenever devicePixelRatio changes for any reason — zoom changes
+    // included, since media-query change events are dispatched before the
+    // animation frame callbacks where the prediction re-anchors zoomDpr, so
+    // the ratio still looks stale from here. The confirmZoom that follows is
+    // deduped against the prediction's own, leaving one worker round-trip
+    // either way. What this path alone catches is the window moving to a
+    // display with a different scale (macOS: no resize event) — same zoom,
+    // new dpr — which must re-anchor the pair so a later prediction doesn't
+    // misread the ratio.
     const onDprChange = guarded(() => {
       watchDpr();
       if (devicePixelRatio !== zoomDpr) confirmZoom();
@@ -289,15 +318,15 @@ if (!SQZ.booted) {
       SQZ.fixedBars.start(left, right, (el) => el.localName === SQZ.panels.HOST_TAG);
     }
 
-    // Breakpoint shifting (media-queries.js), gated on the setting. A shift
-    // application can flip the page into a different layout whose bars the
-    // fixed-bar observer never sees coming (a media flip changes computed
-    // styles without touching any attribute), so every apply nudges the
-    // manager — its update() schedules the debounced whole-document rescan.
+    // Breakpoint shifting (media-queries.js). A shift application can flip
+    // the page into a different layout whose bars the fixed-bar observer
+    // never sees coming (a media flip changes computed styles without
+    // touching any attribute), so every apply nudges the manager — its
+    // update() schedules the debounced whole-document rescan.
     function startMediaShift() {
-      if (settings.responsive === false) return;
       const { left, right } = effWidths();
       SQZ.mediaQueries.start(left, right, {
+        jsBreakpoints: settings.jsBreakpoints !== false,
         onApply: () => {
           if (!idle()) return;
           const w = effWidths();
@@ -477,6 +506,20 @@ if (!SQZ.booted) {
       if (area === 'local' && KEY in changes) {
         const next = changes[KEY].newValue ?? null;
         if (next && echoes.own(next)) return; // our own write bouncing back
+        // A REMOVAL is housekeeping, never a decision. Nothing in the UI
+        // deletes a page record; the one thing that does is the worker's LRU
+        // pruner, and it evicts by last-USE — which a tab left open and
+        // squeezed for weeks stops refreshing, because only toggles, drags
+        // and loads stamp `t`. Adopting the null would close the pillars
+        // under someone mid-read and lose the widths they had set. Keep the
+        // record in memory and write nothing: a write here would defeat the
+        // prune it is reacting to.
+        if (!next && rec?.on && phase === 'active') return;
+        // Mid-drag the pointer owns the widths. Adopting another tab's pair
+        // here would leave the panels showing this drag while onDragEnd
+        // persisted the other tab's numbers. An `on` flip still lands, so a
+        // remote toggle-off keeps working.
+        if (dragging && next?.on && rec?.on) return;
         recEpoch++;
         rec = next;
         applyRecord();
@@ -489,10 +532,11 @@ if (!SQZ.booted) {
     function applyRecord() {
       // Same new-page question init() asks, re-asked wherever the record can
       // change underfoot: an in-page navigation to a fresh URL, a bfcache
-      // return, or the worker's LRU pruner dropping this page's record (that
-      // last one is housekeeping, and it should not shut the pillars). Held
-      // in memory only — see init(); a write here would defeat the pruner it
-      // is reacting to.
+      // return, or the worker's LRU pruner dropping this page's record while
+      // nothing of ours is on screen. (A prune against an ACTIVE page never
+      // gets this far — onStorageChanged keeps that record instead of
+      // adopting the null.) Held in memory only — see init(); a write here
+      // would defeat the pruner it is reacting to.
       if (!rec && autoShowsHere()) rec = { on: true, ...defaultWidths() };
       if (!rec?.on) {
         if (phase === 'active') disable();
@@ -509,11 +553,7 @@ if (!SQZ.booted) {
       SQZ.panels.setAppearance(appearanceFromSettings());
       const dw = defaultsFromSettings();
       SQZ.panels.setDefaults(dw.left, dw.right);
-      // Live-flip the breakpoint shifter when its setting moved.
-      const wantShift = settings.responsive !== false && !suspended;
-      if (wantShift !== SQZ.mediaQueries.running()) {
-        wantShift ? startMediaShift() : SQZ.mediaQueries.stop();
-      }
+      SQZ.mediaQueries.setJsHooks(settings.jsBreakpoints !== false);
     }
 
     function onDragStart() {

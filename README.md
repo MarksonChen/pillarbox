@@ -41,9 +41,9 @@ at any zoom level, so zooming resizes the page's text, not your pillars.
 
 Right-click the icon → **Options**. You can set the default widths, the theme
 (Auto / Light / Dark) and the sidebar colors, turn on a pixel readout while
-dragging, decide whether squeezing **triggers site breakpoints** (on by
-default: pages adapt as if the window shrank), and change the keyboard
-shortcut.
+dragging, and change the keyboard shortcut. **SHIFT JAVASCRIPT BREAKPOINTS**
+is what makes YouTube-style apps reshape under the squeeze; leave it on unless
+some site's scripts misbehave while squeezed.
 
 You can also write **per-URL rules**: a URL pattern gets its own default
 widths, which apply the first time you enable that page and whenever you reset
@@ -67,14 +67,15 @@ off — or delete the rule — if you would rather nothing opened by itself.
 
 ## Good to know
 
-- Sites adapt to the squeeze: their responsive breakpoints see the narrowed
-  width, so a page reflows into the same layout it would use in a window of
-  that size instead of overflowing. Prefer the untouched desktop layout,
-  just narrower? Turn **trigger site breakpoints** off in Options. Either
-  way, a page with a hard minimum width shows a horizontal scrollbar.
+- Sites adapt to the squeeze: their responsive breakpoints — stylesheet media
+  queries, the `matchMedia` checks apps make from JavaScript, and the window
+  widths their scripts measure (YouTube's layout switching and player sizing,
+  for one) — all see the narrowed width, so a page reflows into the same
+  layout it would use in a window of that size instead of overflowing. A page
+  with a hard minimum width shows a horizontal scrollbar.
 - Wide, unbreakable content (code blocks, wide tables) can still run under a
-  sidebar, and apps that lay themselves out from JavaScript may ignore the
-  squeeze entirely.
+  sidebar, and the occasional app that measures the screen itself (rather
+  than the window) may still ignore the squeeze.
 - Small fixed elements — chat buttons, side drawers — are left where they are
   and may sit partly under a sidebar.
 - Fullscreen video is unaffected, and printing temporarily un-squeezes the page

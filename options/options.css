@@ -468,6 +468,15 @@ main {
   letter-spacing: 0.06em;
 }
 .rule.invalid .rule-error { display: block; }
+/* Storage refused the save (the per-item sync quota); same alert voice as an
+   invalid pattern, but about the list as a whole. */
+.rules-quota {
+  margin: 10px 0 0;
+  color: var(--alert);
+  font: 700 11px/1.5 var(--mono);
+  letter-spacing: 0.06em;
+}
+.rules-quota[hidden] { display: none; }
 /* Same fold as the head and the gesture ledger: give the numbers and the
    buttons narrower lanes so the pattern keeps a usable field. */
 @container (max-width: 720px) {

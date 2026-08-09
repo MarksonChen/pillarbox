@@ -10,13 +10,15 @@ chrome.runtime.onInstalled.addListener(async () => {
   const stale = Object.keys(all).filter((k) => k.startsWith(SQZ.LEGACY_SITE_PREFIX));
   if (stale.length) await chrome.storage.local.remove(stale);
 
-  // Fixed-bar squeezing is always on; a stored `squeezeFixed: false` from a
-  // pre-release build must not linger (nothing reads it, but a stale flag
-  // in storage invites confusion).
+  // Fixed-bar squeezing and breakpoint shifting are always on; a stored
+  // `squeezeFixed: false` / `responsive: false` from a pre-release build
+  // must not linger (nothing reads them, but a stale flag in storage
+  // invites confusion).
   const raw = await chrome.storage.sync.get(SQZ.SETTINGS_KEY);
   const settings = raw[SQZ.SETTINGS_KEY];
-  if (settings && 'squeezeFixed' in settings) {
-    delete settings.squeezeFixed;
+  const dead = ['squeezeFixed', 'responsive'].filter((k) => settings && k in settings);
+  if (dead.length) {
+    for (const k of dead) delete settings[k];
     await chrome.storage.sync.set({ [SQZ.SETTINGS_KEY]: settings });
   }
 });
@@ -77,7 +79,46 @@ const CSS_FETCH_TIMEOUT = 15000;
 const CSS_BUDGET = 8 * 1024 * 1024; // total bytes across one import tree
 const CSS_IMPORT_DEPTH = 3;
 
-async function fetchCssFile(url, budget) {
+// Is this host on the private side of the network? The relay fetches with the
+// extension's <all_urls> reach, so without a guard a page Pillarbox is active
+// on could point a <link rel=stylesheet> at something only the browser's host
+// can see — a router admin page, a cloud metadata endpoint — and then read the
+// response back out of the <style> clone, which lives in the page's own DOM.
+// Literal matching cannot follow a rebinding DNS name, so this is hardening
+// rather than a boundary.
+function isPrivateHost(hostname) {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host === '::1' || host.startsWith('::ffff:127.')) return true;
+  if (/^(?:fc|fd)[0-9a-f]{2}:/.test(host) || host.startsWith('fe80:')) return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
+  if (!v4) return false;
+  const a = Number(v4[1]);
+  const b = Number(v4[2]);
+  return a === 0 || a === 127 || a === 10
+    || (a === 169 && b === 254)               // link-local, metadata services
+    || (a === 192 && b === 168)
+    || (a === 172 && b >= 16 && b <= 31);
+}
+
+// `from` is the URL of the page that asked. A private target is allowed only
+// when that page is itself on a private address: a localhost dev site or an
+// intranet app linking its own stylesheets is the ordinary case and has to
+// keep working, and it can already read those origins' own responses. What
+// this refuses is the escalation — a PUBLIC page reaching into the LAN, or
+// into the loopback interface, through our host permission.
+function relayable(url, from) {
+  let u = null;
+  try { u = new URL(url); } catch { return false; }
+  if (!/^https?:$/i.test(u.protocol)) return false;
+  if (!isPrivateHost(u.hostname)) return true;
+  let asker = null;
+  try { asker = new URL(from); } catch { return false; }
+  return isPrivateHost(asker.hostname);
+}
+
+async function fetchCssFile(url, budget, from) {
+  if (!relayable(url, from)) return null; // also covers @import targets
   let res;
   try {
     res = await fetch(url, {
@@ -86,6 +127,12 @@ async function fetchCssFile(url, budget) {
     });
   } catch {
     return null;
+  } finally {
+    // Touching an extension API resets the worker's 30s idle timer; a plain
+    // fetch() does not. An @import chain of slow sheets can add up to more
+    // than that, and a worker killed mid-relay never sends its reply — the
+    // content script then sees only a dead channel.
+    chrome.runtime.getPlatformInfo().catch(() => {});
   }
   if (!res.ok) return null;
   const text = await res.text().catch(() => null);
@@ -164,10 +211,10 @@ function wrapImportedCss(text, tail) {
   return text;
 }
 
-async function inlineCss(url, budget, depth, seen) {
+async function inlineCss(url, budget, depth, seen, from) {
   if (seen.has(url)) return ''; // import cycle: drop the repeat
   seen.add(url);
-  let text = await fetchCssFile(url, budget);
+  let text = await fetchCssFile(url, budget, from);
   if (text === null) return null;
   text = absolutizeCssUrls(text, url);
   const { prefix, imports, body } = splitCssImports(text);
@@ -177,7 +224,7 @@ async function inlineCss(url, budget, depth, seen) {
     // absolutized) @import — the page fetches it natively, styled but
     // unshifted, which beats dropping the rules wholesale.
     const child = depth > 0 && /^https?:/i.test(imp.url)
-      ? await inlineCss(imp.url, budget, depth - 1, seen)
+      ? await inlineCss(imp.url, budget, depth - 1, seen, from)
       : null;
     out += (child === null ? imp.raw : wrapImportedCss(child, imp.tail)) + '\n';
   }
@@ -188,11 +235,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== SQZ.MSG.FETCH_CSS) return;
   if (sender.tab === undefined) return; // only content scripts ask
   const url = String(msg.url ?? '');
-  if (!/^https?:/i.test(url)) {
+  // sender.origin/url is set by the browser, not by the page, so it is a
+  // trustworthy answer to "who is asking" for the private-target check.
+  const from = sender.origin ?? sender.url ?? '';
+  if (!relayable(url, from)) {
     sendResponse({ ok: false });
     return;
   }
-  inlineCss(url, { left: CSS_BUDGET }, CSS_IMPORT_DEPTH, new Set())
+  inlineCss(url, { left: CSS_BUDGET }, CSS_IMPORT_DEPTH, new Set(), from)
     .then((text) => sendResponse(text === null ? { ok: false } : { ok: true, text }))
     .catch(() => sendResponse({ ok: false }));
   return true; // keep the channel open for the async response
@@ -232,6 +282,22 @@ chrome.action.onClicked.addListener(async (tab) => {
     // No receiver: the tab predates this extension load. Inject and retry.
   }
   try {
+    // The MAIN-world hook first — the isolated scripts announce the squeeze
+    // to it, so it must be listening before they boot. Injected this late it
+    // cannot retrofit MediaQueryLists the page already minted through the
+    // native matchMedia (those follow only after a reload), so it is
+    // best-effort and never fatal: the CSS shift works without it.
+    //
+    // Both calls also rely on files[] executing in order (mq-shift.js defines
+    // what match-media.js consumes; defaults.js before everything). The
+    // manifest key and registerContentScripts document that guarantee;
+    // executeScript's own files[] does not spell it out, though Chromium
+    // injects sequentially — worth knowing if a future Chrome ever differs.
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: [...SQZ.MAIN_WORLD_FILES],
+      world: 'MAIN',
+    }).catch(() => {});
     await chrome.scripting.executeScript({
       target: { tabId },
       files: [...SQZ.CONTENT_FILES],

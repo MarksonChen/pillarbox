@@ -106,7 +106,17 @@ SQZ.panels ??= (() => {
     left: SQZ.DEFAULT_SETTINGS.defaultLeft,
     right: SQZ.DEFAULT_SETTINGS.defaultRight,
   };
-  let dragged = false; // a real drag just ended; swallow the dblclick after it
+  // Did a drag happen inside the pair of clicks that a dblclick is
+  // completing? That is the only question worth asking before treating a
+  // dblclick as a gesture, because a drag can sit on EITHER click of the
+  // pair — Chrome's dblclick slop is wider than DRAG_THRESHOLD, so a small
+  // deliberate nudge still counts as a click. Timing cannot answer it (a
+  // drag followed by a separate quick double-click looks identical), but the
+  // event stream can: a click arrives immediately after the pointerup that
+  // ended the drag, so the drag's own click is tagged as it goes past, while
+  // any other first-of-a-pair click starts the question over.
+  let dragInPair = false;
+  let dragClickPending = false;
   let appearance = {
     theme: SQZ.DEFAULT_SETTINGS.theme,
     colorLight: SQZ.DEFAULT_SETTINGS.colorLight,
@@ -244,6 +254,13 @@ SQZ.panels ??= (() => {
 
     handle.addEventListener('pointerdown', (e) => {
       if (!callbacks || !e.isPrimary || e.button !== 0) return;
+      // One pointer at a time. A mouse and a touch contact are each "primary"
+      // for their own type, so on a touchscreen a stray tap during a mouse
+      // drag would otherwise take the pointerId over: the mouse's pointerup
+      // no longer matches, the tap's own release exits early on !started, and
+      // nothing ever runs the cleanup — leaving the page-wide selection lock
+      // on and the orchestrator stuck believing a drag is still in progress.
+      if (pointerId !== null) return;
       pointerId = e.pointerId;
       startX = e.clientX;
       started = false;
@@ -304,11 +321,7 @@ SQZ.panels ??= (() => {
       pointerId = null;
       if (!started) return;
       started = false;
-      // The second press of a double-click can still clear DRAG_THRESHOLD
-      // (Chrome's dblclick slop is wider than 3px), and the dblclick that
-      // follows would then undo the drag the user just made — collapsing the
-      // side, or with a modifier resetting both to the page defaults.
-      dragged = true;
+      dragClickPending = true; // the click about to fire carries this drag
       mirroring = false;
       host?.classList.remove('dragging');
       handle.classList.remove('active');
@@ -388,10 +401,19 @@ SQZ.panels ??= (() => {
       root.append(panel);
       els[side] = { panel, handle, readout };
       wireDrag(side, handle, readout);
-      // Every press anywhere on a sidebar — handle presses bubble here too —
-      // opens a fresh gesture, so the "a drag just ended" flag only ever
-      // survives into the dblclick that closes the very pair that set it.
-      panel.addEventListener('pointerdown', () => { dragged = false; });
+      // Gesture bookkeeping for the dblclick below (handle events bubble here
+      // too). A pending tag that never met its click — a pointercancel ends a
+      // drag without one — dies at the next press rather than mislabelling a
+      // later pair.
+      panel.addEventListener('pointerdown', () => { dragClickPending = false; });
+      panel.addEventListener('click', (e) => {
+        if (dragClickPending) {
+          dragClickPending = false;
+          dragInPair = true;
+        } else if (e.detail <= 1) {
+          dragInPair = false; // a plain first click: this pair is a gesture
+        }
+      });
       // ONE dblclick gesture for the whole sidebar surface, handle
       // included (it bubbles here; the readout is pointer-events:none):
       // plain double-click collapses the side, or restores it when it is
@@ -401,8 +423,8 @@ SQZ.panels ??= (() => {
       // matching the drag convention (modifier = both sides).
       panel.addEventListener('dblclick', (e) => {
         if (!callbacks) return;
-        if (dragged) { // this pair of clicks was a resize, not a gesture
-          dragged = false;
+        if (dragInPair) {
+          dragInPair = false; // this pair of clicks was a resize, not a gesture
           return;
         }
         if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {

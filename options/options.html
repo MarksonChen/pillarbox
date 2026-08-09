@@ -46,8 +46,8 @@
         <span class="box" aria-hidden="true"></span> PIXEL READOUT WHILE RESIZING
       </label>
       <label class="readout">
-        <input type="checkbox" id="responsive">
-        <span class="box" aria-hidden="true"></span> TRIGGER SITE BREAKPOINTS — PAGES ADAPT AS IF THE WINDOW SHRANK
+        <input type="checkbox" id="jsBreakpoints">
+        <span class="box" aria-hidden="true"></span> SHIFT JAVASCRIPT BREAKPOINTS — YOUTUBE-STYLE APPS RESHAPE TOO
       </label>
     </section>
 
@@ -103,7 +103,7 @@
       RESIZE OR TOGGLE ONE, IT KEEPS ITS OWN STATE AND THE RULE STOPS DECIDING.
       (TRAILING <span class="hint" tabindex="0"
         aria-describedby="hashTip">#HASH<span class="hint-tip" id="hashTip"
-        role="tooltip">Some URLs end with "#something", like
+        role="tooltip" aria-hidden="true">Some URLs end with "#something", like
         en.wikipedia.org/wiki/Pillarbox#References. This marks a place inside the page
         rather than a different page, so we cut it off before regex matching. Your
         regex only ever sees the URL up to before the #, which makes $-anchoring of regex
@@ -114,6 +114,7 @@
         </div>
         <div id="rules"></div>
         <button id="addRule" type="button">+ ADD RULE</button>
+        <p id="rulesQuota" class="rules-quota" role="status" hidden></p>
       </div>
     </section>
   </form>
@@ -153,7 +154,12 @@
 <script src="../shared/defaults.js"></script>
 <!-- The real content scripts: Chrome injects none into extension pages, so
      the options page loads them itself (manifest order) and gets live,
-     adjustable pillars like any other page. options.js seeds the record. -->
+     adjustable pillars like any other page. options.js seeds the record.
+     content/match-media.js is deliberately absent: this page has no
+     isolated/main world split, so its width-metric lie would feed straight
+     back into the extension's own clamp math. media-queries.js announces
+     into the void here, which is fine. -->
+<script src="../shared/mq-shift.js"></script>
 <script src="../content/squeeze.js"></script>
 <script src="../content/media-queries.js"></script>
 <script src="../content/fixed-bars.js"></script>

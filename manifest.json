@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Pillarbox: Push Page Left/Right/Inward",
-  "version": "0.10.0",
+  "version": "0.11.0",
+  "minimum_chrome_version": "111",
   "description": "Push page content leftward / rightward / inward with adjustable sidebars",
   "permissions": ["storage", "scripting"],
   "host_permissions": ["<all_urls>"],
@@ -11,6 +12,7 @@
       "matches": ["<all_urls>"],
       "js": [
         "shared/defaults.js",
+        "shared/mq-shift.js",
         "content/squeeze.js",
         "content/media-queries.js",
         "content/fixed-bars.js",
@@ -18,6 +20,16 @@
         "content/index.js"
       ],
       "run_at": "document_end",
+      "all_frames": false
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "shared/mq-shift.js",
+        "content/match-media.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
       "all_frames": false
     }
   ],

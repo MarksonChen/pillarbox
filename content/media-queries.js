@@ -26,6 +26,15 @@
 // original sheet is turned off via sheet.disabled — the CSSOM flag, NOT
 // link.disabled, whose attribute round-trip re-fetches the sheet
 // asynchronously and would leave the page unstyled for a frame on restore.
+// One consequence is inherent and documented as a limitation: while a clone
+// stands in, our disable is indistinguishable from the page's own, so a
+// script that turns that sheet off through the CSSOM sees nothing change
+// (the clone keeps styling) and reads the flag back already true.
+//
+// Stylesheets are only half of it: sites also ask window.matchMedia from
+// JavaScript (YouTube's layout does). The MAIN-world hook in match-media.js
+// covers those; this file merely announces the shift to it (see announce),
+// in the same coalesced flush as the CSS edits so both flip together.
 var SQZ = globalThis.SQZ ??= {};
 
 // ??= so re-injection can't replace a live instance (see squeeze.js).
@@ -51,69 +60,31 @@ SQZ.mediaQueries ??= (() => {
   let pendTimer = 0;
   let pendWidths = null;
   let lastEnvKey = '';       // viewport fingerprint for the env substitutions
+  let jsHooks = false;       // announce shifts to the MAIN-world hook?
+  let announced = 0;         // last value announced (0 = the hook is inert)
 
   // --- media-text shifting -----------------------------------------------
-  // A feature VALUE: calc()/min()/max()/clamp() with up to three nesting
-  // levels, or one dimension token (700px, 40em, 0). The lookbehinds keep
-  // `device-width` (physical screen, must not shift) out: its `width` is
-  // preceded by `-`, and `min-device-width` never parses as `min-` + width.
-  const BAL2 = String.raw`(?:[^()]|\((?:[^()]|\([^()]*\))*\))*`;
-  const VALUE = String.raw`(?:(?:calc|min|max|clamp)\(${BAL2}\)|[\d.]+[a-z%]*)`;
-  const OP = String.raw`(?:<=|>=|<|>|=)`;
-  const RX_COLON = new RegExp(String.raw`((?<![-\w])(?:min-|max-)?width\s*:\s*)(${VALUE})`, 'gi');
-  const RX_AFTER = new RegExp(String.raw`((?<![-\w])width\s*${OP}\s*)(${VALUE})`, 'gi');
-  const RX_BEFORE = new RegExp(String.raw`(${VALUE})(\s*${OP}\s*width(?![-\w]))`, 'gi');
-  const RX_ORIENT = /(?<![-\w])orientation\s*:\s*(portrait|landscape)(?![-\w])/gi;
-  const RX_ASPECT = /(?<![-\w])(min-|max-)?aspect-ratio\s*:\s*([\d.]+)\s*(?:\/\s*([\d.]+))?/gi;
-  // Cheap prefilter: anything shiftText COULD act on. Over-matching is fine
-  // (device-width rules run shiftText and come back unchanged — never
-  // registered); missing something here would silently skip it.
-  const RX_ANY = /width|orientation|aspect-ratio/i;
-
-  // A unitless 0 is a valid media-feature length but cannot join a calc()
-  // sum as a bare number.
-  const wrap = (v, s) => `calc(${/^0+(\.0*)?$/.test(v) ? v + 'px' : v} + ${s}px)`;
-
-  // Constants must be width-free: a min-width tautology would be re-shifted
-  // by the width passes (or broken by a later update); height features pass
-  // through everything untouched.
-  const MQ_TRUE = 'min-height: 0px';
-  const MQ_FALSE = 'min-height: 999999px';
-
-  function shiftText(text, s) {
-    if (!s) return text;
-    // Chain order matters only in that each pass must not create text a
-    // later pass would re-match; shifted values contain no bare `width`
-    // ident and the env constants are height-based.
-    let out = text.replace(RX_BEFORE, (m, v, rest) => wrap(v, s) + rest);
-    out = out.replace(RX_AFTER, (m, head, v) => head + wrap(v, s));
-    out = out.replace(RX_COLON, (m, head, v) => head + wrap(v, s));
-    // Media-query width includes the classic scrollbar, so the effective
-    // width the page "should" see is innerWidth - S, not clientWidth - S:
-    // the scrollbar offset between MQ width and content width exists
-    // natively and sites already design around it.
-    const effW = innerWidth - s;
-    const portrait = innerHeight >= effW;
-    out = out.replace(RX_ORIENT, (m, o) =>
-      ((o.toLowerCase() === 'portrait') === portrait ? MQ_TRUE : MQ_FALSE));
-    const ar = effW / Math.max(1, innerHeight);
-    out = out.replace(RX_ASPECT, (m, mm, a, b) => {
-      const r = parseFloat(a) / (b ? parseFloat(b) : 1);
-      if (!Number.isFinite(r) || r <= 0) return m;
-      const kind = (mm || '').toLowerCase();
-      const ok = kind === 'min-' ? ar >= r
-        : kind === 'max-' ? ar <= r
-          : Math.abs(ar - r) < 1e-9;
-      return ok ? MQ_TRUE : MQ_FALSE;
-    });
-    return out;
-  }
+  // The transform lives in shared/mq-shift.js — one implementation for this
+  // file and for the MAIN-world matchMedia hook (content/match-media.js).
+  const XF = globalThis.__pillarboxMqShift;
+  const RX_ANY = XF.ANY;
+  const shiftText = (text, s) => XF.shiftMediaText(text, s, innerWidth, innerHeight);
 
   // The env substitutions bake in the viewport, so a resize can move their
   // verdict even when S is unchanged; this key says "same viewport".
   const envKey = () => innerWidth + 'x' + innerHeight;
 
   // --- registry ----------------------------------------------------------
+  // The sheet whose ownerNode says whether a registry entry is still
+  // reachable: an imported sheet has none of its own (it hangs off ownerRule),
+  // so keying the prune on the sheet we happened to walk would make every
+  // entry inside an @import chain immortal.
+  function topSheet(sheet) {
+    let s = sheet;
+    while (s && !s.ownerNode && s.parentStyleSheet) s = s.parentStyleSheet;
+    return s;
+  }
+
   function maybeEdit(ml, sheet) {
     if (!ml || !shift || edited.has(ml)) return false;
     let orig;
@@ -122,7 +93,7 @@ SQZ.mediaQueries ??= (() => {
     const next = shiftText(orig, shift);
     if (next === orig) return false;
     try { ml.mediaText = next; } catch { return false; }
-    edited.set(ml, { orig, sheet });
+    edited.set(ml, { orig, sheet, top: topSheet(sheet) });
     return true;
   }
 
@@ -194,19 +165,45 @@ SQZ.mediaQueries ??= (() => {
       viaImport = true;
       s = s.parentStyleSheet;
     }
-    return s?.ownerNode ? { node: s.ownerNode, before: viaImport } : null;
+    // `top` is the sheet the anchor node currently owns; the upkeep pass
+    // compares it back against node.sheet to notice a swap (see maintainCopies).
+    return s?.ownerNode ? { node: s.ownerNode, before: viaImport, top: s } : null;
   }
 
-  // The media condition the clone must carry: the owner <link>'s attribute
-  // for a top-level sheet (never edited by us — attributes stay pristine),
-  // or the import rule's ORIGINAL condition (the live one may already be
-  // shifted; walkSheet(clone) will shift the clone's copy freshly).
-  function cloneMedia(sheet, anchor) {
-    if (!anchor.before) return anchor.node.getAttribute?.('media') ?? '';
-    let ownerRule = null;
-    try { ownerRule = sheet.ownerRule; } catch {}
-    if (!ownerRule) return '';
-    return edited.get(ownerRule.media)?.orig ?? ownerRule.media.mediaText;
+  // Everything the clone has to reproduce from the link or @import that
+  // brought this sheet in. The media condition rides the clone's own `media`
+  // attribute; layer()/supports() have to WRAP the text, because a clone that
+  // dropped them would float out of its cascade layer (unlayered rules beat
+  // layered ones) or apply rules whose supports() test the browser had
+  // failed. The worker does the same job for the imports it inlines
+  // (wrapImportedCss); this is the one import handled on this side.
+  //
+  // A top-level sheet takes its condition from the owner <link>'s attribute,
+  // which we never edit — attributes stay pristine. An import's condition is
+  // read from the registry's ORIGINAL text, since the live one may already
+  // be shifted and walkSheet(clone) will shift the clone's copy freshly.
+  function cloneConditions(sheet, anchor) {
+    const plain = { media: '', wrap: (text) => text };
+    if (!anchor.before) {
+      return { ...plain, media: anchor.node.getAttribute?.('media') ?? '' };
+    }
+    let rule = null;
+    try { rule = sheet.ownerRule; } catch {}
+    if (!rule) return plain;
+    let layer = null;
+    let supports = null;
+    try { layer = rule.layerName; } catch {}
+    try { supports = rule.supportsText; } catch {}
+    return {
+      media: edited.get(rule.media)?.orig ?? rule.media.mediaText,
+      wrap: (text) => {
+        // Innermost first, so the nesting reads layer { supports { rules } },
+        // matching how the shorthand's conditions apply.
+        if (supports != null) text = `@supports ${supports} {\n${text}\n}`;
+        if (layer != null) text = `@layer ${layer ? layer + ' ' : ''}{\n${text}\n}`;
+        return text;
+      },
+    };
   }
 
   async function adoptOpaque(sheet) {
@@ -216,42 +213,57 @@ SQZ.mediaQueries ??= (() => {
     const href = sheet.href;
     const anchor = ownerAnchor(sheet);
     if (!href || !/^https?:/i.test(href) || !anchor || failed.has(href)) return;
-    const media = cloneMedia(sheet, anchor);
-    copies.set(sheet, null); // reserve: dedupes concurrent walks
+    const cond = cloneConditions(sheet, anchor);
+    // The <style> goes in NOW, empty, while we are still inside the
+    // synchronous walk. Several cross-origin @imports of one readable sheet
+    // share an anchor, so inserting on fetch completion would order the
+    // clones by download speed rather than document order and silently
+    // invert the cascade between them. It also dedupes concurrent walks, the
+    // job the old null placeholder did.
+    const el = document.createElement('style');
+    el.setAttribute(COPY_ATTR, href);
+    if (cond.media) el.media = cond.media;
+    anchor.before ? anchor.node.before(el) : anchor.node.after(el);
+    // `filled` gates the disable: until the text lands the clone styles
+    // nothing, and turning the original off against an empty clone would
+    // leave the page unstyled for the length of the fetch.
+    const entry = { el, anchor: anchor.node, top: anchor.top, filled: false };
+    copies.set(sheet, entry);
     const startedAt = epoch;
     let text = textCache.get(href);
     if (text === undefined) {
       let res = null;
+      let dropped = false;
       try {
         res = await chrome.runtime.sendMessage({ type: SQZ.MSG.FETCH_CSS, url: href });
       } catch {
+        dropped = true;
         SQZ.orphanGuard?.(); // extension reloaded mid-fetch: tear down
       }
       if (epoch !== startedAt) return; // stopped (or cycled) while fetching
       if (!res?.ok || typeof res.text !== 'string') {
-        failed.add(href);
-        copies.delete(sheet);
+        // A dropped channel is not a verdict about this URL: MV3 kills an
+        // idle worker after 30s and a long @import chain can outlive one, so
+        // blacklisting here would cost the sheet for the page's whole life
+        // when a retry would simply wake a fresh worker.
+        if (!dropped) failed.add(href);
+        dropCopy(sheet, entry);
         return;
       }
       text = res.text;
       textCache.set(href, text);
     }
-    if (epoch !== startedAt || !anchor.node.isConnected) {
-      copies.delete(sheet);
+    if (epoch !== startedAt || !el.isConnected) {
+      dropCopy(sheet, entry);
       return;
     }
-    const el = document.createElement('style');
-    el.setAttribute(COPY_ATTR, href);
-    if (media) el.media = media;
-    el.textContent = text;
-    anchor.before ? anchor.node.before(el) : anchor.node.after(el);
+    el.textContent = cond.wrap(text);
     if (!el.sheet) { // e.g. a non-HTML document refusing the element
-      el.remove();
       failed.add(href);
-      copies.delete(sheet);
+      dropCopy(sheet, entry);
       return;
     }
-    copies.set(sheet, { el, anchor: anchor.node });
+    entry.filled = true;
     walkSheet(el.sheet);
     try { sheet.disabled = true; } catch {}
     fireApply();
@@ -259,13 +271,33 @@ SQZ.mediaQueries ??= (() => {
 
   function dropCopy(sheet, entry) {
     entry.el.remove();
-    try { sheet.disabled = false; } catch {}
+    // Only ever undo OUR disable: a clone that never got its text never
+    // disabled anything, and re-enabling there would fight a page that had
+    // turned the sheet off itself.
+    if (entry.filled) {
+      try { sheet.disabled = false; } catch {}
+    }
     copies.delete(sheet);
   }
 
   // --- change tracking ---------------------------------------------------
   function fireApply() {
     onApply?.();
+  }
+
+  // Tell the MAIN-world matchMedia hook (content/match-media.js) the current
+  // shift; it re-evaluates the page's MediaQueryLists and fires synthetic
+  // change events for the ones that flipped. A same-value re-announcement is
+  // meaningful while shifted (the hook re-bakes its orientation/aspect
+  // substitutions against the live viewport), but a page at rest is never
+  // poked. Returns whether an event went out — a JS flip can restyle the
+  // page with no CSS edit of ours, so callers count it as a change.
+  function announce(s) {
+    const value = jsHooks && s ? s : 0;
+    if (!value && !announced) return false;
+    announced = value;
+    dispatchEvent(new CustomEvent(XF.EVENT, { detail: value }));
+    return true;
   }
 
   function onMutations(mutations) {
@@ -298,13 +330,37 @@ SQZ.mediaQueries ??= (() => {
     if (changed) fireApply();
   }
 
+  // Clone upkeep. Runs even at shift 0: collapsing both sides deliberately
+  // keeps the clones alive (see flushUpdate), and that is exactly the state
+  // in which a page unloading its <link> would be left wearing the ghost of
+  // the stylesheet it just removed — visibly, since the page looks
+  // un-squeezed there and nothing else would drop the clone until a side
+  // reopened.
+  function maintainCopies() {
+    for (const [sheet, entry] of copies) {
+      // The anchor no longer owning the sheet we cloned covers every way a
+      // page can replace it while keeping the element: an href swap mints a
+      // new CSSStyleSheet, and link.disabled = true detaches it outright.
+      // Either way our clone would otherwise keep applying the old rules on
+      // top of whatever replaced them.
+      if (!entry.anchor.isConnected || !entry.el.isConnected
+          || entry.anchor.sheet !== entry.top) {
+        dropCopy(sheet, entry);
+      } else if (entry.filled && !sheet.disabled) {
+        try { sheet.disabled = true; } catch {} // a theme switcher re-enabled it
+      }
+    }
+  }
+
   // Catches what no DOM event announces: rules added through insertRule
   // (styled-components et al) and sheets whose <link> load raced the
   // observer. A rule-count probe per sheet is near-free; a full walk runs
   // only for sheets that actually moved (the registry makes it idempotent).
   function rescan() {
     if (SQZ.orphanGuard?.()) return;
-    if (!shift || document.hidden) return;
+    if (document.hidden) return;
+    maintainCopies();
+    if (!shift) return;
     let changed = false;
     for (const sheet of [...document.styleSheets, ...document.adoptedStyleSheets]) {
       let n = null;
@@ -315,19 +371,24 @@ SQZ.mediaQueries ??= (() => {
         changed = walkSheet(sheet) || changed;
       }
     }
-    for (const [sheet, entry] of copies) {
-      if (!entry) continue; // fetch in flight
-      if (!entry.anchor.isConnected || !entry.el.isConnected) {
-        dropCopy(sheet, entry); // the page removed its link (or our clone)
-      } else if (!sheet.disabled) {
-        try { sheet.disabled = true; } catch {} // a theme switcher re-enabled it
-      }
-    }
     // Registry entries whose sheet left the document restore nothing and
-    // would pile up on a long-lived SPA; let them go.
+    // would pile up on a long-lived SPA; let them go. Reachability is asked
+    // of the TOP-level sheet: an imported sheet has no ownerNode of its own
+    // and a constructed one never has any, so keying the question on the
+    // walked sheet made both kinds immortal.
+    let adopted = null;
     for (const [ml, entry] of edited) {
-      const node = entry.sheet?.ownerNode;
-      if (node && !node.isConnected && !copies.has(entry.sheet)) edited.delete(ml);
+      const top = entry.top;
+      if (!top) continue;
+      const node = top.ownerNode;
+      let gone;
+      if (node) {
+        gone = !node.isConnected;
+      } else {
+        adopted ??= new Set(document.adoptedStyleSheets);
+        gone = !adopted.has(top);
+      }
+      if (gone && !copies.has(entry.sheet)) edited.delete(ml);
     }
     if (changed) fireApply();
   }
@@ -338,11 +399,27 @@ SQZ.mediaQueries ??= (() => {
     epoch++;
     shift = Math.max(0, left + right);
     onApply = opts?.onApply ?? null;
+    jsHooks = opts?.jsBreakpoints === true;
     lastEnvKey = envKey();
     scanAll();
     observer = new MutationObserver(onMutations);
     observer.observe(document.documentElement, { subtree: true, childList: true });
     rescanTimer = setInterval(rescan, RESCAN_MS);
+    // Announce last. The MAIN-world hook handles it synchronously — change
+    // events and a resize poke all land inside this call — and a page that
+    // reacts by injecting its narrow-layout stylesheet must do so in front of
+    // a watcher that already exists, or the new sheet keeps evaluating
+    // against the real viewport until the 2s rescan notices it.
+    announce(shift);
+  }
+
+  // Settings can flip the JS side live (the options checkbox) without
+  // restarting the CSS side; a dormant page just waits for the next start().
+  function setJsHooks(on) {
+    on = on === true;
+    if (on === jsHooks) return;
+    jsHooks = on;
+    if (observer) announce(shift);
   }
 
   // Coalesced: drags stream widths, and every flush rewrites each
@@ -367,6 +444,7 @@ SQZ.mediaQueries ??= (() => {
       // (their rules read exactly like the originals with no shift, and
       // keeping them saves a refetch when a side reopens).
       restoreEdits();
+      announce(0);
       fireApply();
       return;
     }
@@ -381,6 +459,7 @@ SQZ.mediaQueries ??= (() => {
       } catch {}
     }
     changed = scanAll() || changed; // an S move can make fresh rules eligible
+    changed = announce(s) || changed; // JS flips restyle with no CSS edit
     if (changed) fireApply();
   }
 
@@ -393,9 +472,9 @@ SQZ.mediaQueries ??= (() => {
     pendTimer = 0;
     epoch++;
     restoreEdits();
-    for (const [sheet, entry] of copies) {
-      if (entry) dropCopy(sheet, entry);
-    }
+    announce(0);
+    jsHooks = false;
+    for (const [sheet, entry] of copies) dropCopy(sheet, entry);
     copies.clear();
     counts = new WeakMap();
     failed = new Set();
@@ -403,8 +482,6 @@ SQZ.mediaQueries ??= (() => {
     onApply = null;
   }
 
-  const running = () => !!observer;
-
   // shiftText is exposed for the e2e unit battery only.
-  return { start, update, stop, running, shiftText };
+  return { start, update, stop, setJsHooks, shiftText };
 })();

@@ -22,7 +22,7 @@ function formState() {
     defaultLeft: SQZ.clampDefault($('#defaultLeft').value),
     defaultRight: SQZ.clampDefault($('#defaultRight').value),
     showReadout: $('#showReadout').checked,
-    responsive: $('#responsive').checked,
+    jsBreakpoints: $('#jsBreakpoints').checked,
     colorLight: $('#colorLight').value,
     colorDark: $('#colorDark').value,
     rules: rulesFromForm(),
@@ -46,6 +46,13 @@ function markValidity(row) {
   input.classList.toggle('invalid', !ok);
   row.classList.toggle('invalid', !ok);
   input.setAttribute('aria-invalid', String(!ok));
+  // The spelled-out reason is revealed by CSS alone, which a screen reader
+  // never reaches — leaving "invalid entry" as the only cue and the part that
+  // matters (the rule is skipped outright) unsaid. Point the field at it for
+  // as long as it applies.
+  const error = row.querySelector('.rule-error');
+  if (ok) input.removeAttribute('aria-describedby');
+  else input.setAttribute('aria-describedby', error.id);
 }
 
 // First-match-wins makes order meaningful, so rows can be moved, not just
@@ -80,6 +87,8 @@ const MODE_PLACEHOLDER = {
   substring: 'https://www.example.com/articles',
 };
 
+let ruleSeq = 0; // ids for the per-row error text markValidity points at
+
 function ruleRow(rule) {
   const row = document.createElement('div');
   row.className = 'rule';
@@ -98,6 +107,7 @@ function ruleRow(rule) {
       <button type="button" class="rule-remove" title="Remove rule" aria-label="Remove rule">✕</button>
     </span>
     <span class="rule-error">INVALID REGULAR EXPRESSION — THIS RULE IS IGNORED.</span>`;
+  row.querySelector('.rule-error').id = `ruleError${++ruleSeq}`;
   // Regex is the default, and an absent mode on a stored rule means regex.
   const modeBtn = row.querySelector('.rule-mode');
   const setMode = (mode) => {
@@ -147,8 +157,15 @@ function ruleRow(rule) {
   row.querySelector('.rule-up').addEventListener('click', () => moveRule(row, -1));
   row.querySelector('.rule-down').addEventListener('click', () => moveRule(row, +1));
   row.querySelector('.rule-remove').addEventListener('click', () => {
+    // Removing the row detaches the button that was just pressed, dropping
+    // focus to <body> — and from there the next Tab restarts at the top of a
+    // very long poster, once per rule deleted. Hand focus to whatever takes
+    // this row's place, the same courtesy moveRule pays.
+    const neighbour = row.nextElementSibling ?? row.previousElementSibling;
+    const landing = neighbour?.querySelector('.rule-remove') ?? $('#addRule');
     row.remove();
     syncMoveButtons();
+    landing.focus();
     saveSettings();
   });
   markValidity(row);
@@ -293,17 +310,42 @@ async function loadSettings() {
   $('#defaultLeft').value = s.defaultLeft;
   $('#defaultRight').value = s.defaultRight;
   $('#showReadout').checked = s.showReadout === true;
-  $('#responsive').checked = s.responsive !== false; // default on
+  $('#jsBreakpoints').checked = s.jsBreakpoints !== false; // default on
   $('#colorLight').value = SQZ.sanitizeColor(s.colorLight, SQZ.DEFAULT_SETTINGS.colorLight);
   $('#colorDark').value = SQZ.sanitizeColor(s.colorDark, SQZ.DEFAULT_SETTINGS.colorDark);
   renderRules(s.rules);
   applyPageTheme(s.theme);
   syncTints();
+  storedJson = JSON.stringify(formState());
+  showSaveError(null);
 }
 
 // Our own saves must not re-render the form (that would stomp an edit in
 // progress); see SQZ.makeEchoes for why matching is by content, not count.
 const echoes = SQZ.makeEchoes();
+
+// The form's JSON as last known to be in storage. A save that would write
+// exactly this is skipped: storage fires NO onChanged event for a write that
+// changes nothing, so the echo stamp minted for it would never be consumed —
+// and a stranded stamp can later swallow a genuine remote change that happens
+// to land on the same value, leaving this form showing something storage does
+// not hold. Clicking the already-active tint swatch is enough to mint one.
+let storedJson = null;
+
+// chrome.storage.sync refuses any single item over QUOTA_BYTES_PER_ITEM
+// (8,192 bytes, counted as the key plus the JSON of its value) and rejects
+// the write. Every setting lives under one key, so a long enough rules list
+// reaches that ceiling — substring mode invites pasting whole URLs — and
+// without a word about it the catch below would just re-render the form,
+// erasing the rule the user had typed with no explanation.
+const QUOTA_PER_ITEM = chrome.storage.sync.QUOTA_BYTES_PER_ITEM ?? 8192;
+const itemBytes = (json) => new TextEncoder().encode(json).length + SQZ.SETTINGS_KEY.length;
+
+function showSaveError(message) {
+  const box = $('#rulesQuota');
+  box.textContent = message ?? '';
+  box.hidden = !message;
+}
 
 async function saveSettings() {
   saveEpoch++;
@@ -318,12 +360,24 @@ async function saveSettings() {
   }
   applyPageTheme(settings.theme);
   syncTints();
+  const json = JSON.stringify(settings);
+  if (json === storedJson) return; // no write, and so no stamp to strand
+  const bytes = itemBytes(json);
+  if (bytes > QUOTA_PER_ITEM) {
+    showSaveError(`TOO BIG TO SAVE — ${bytes} BYTES OF ${QUOTA_PER_ITEM}. `
+      + 'SHORTEN OR REMOVE A RULE; NOTHING WAS SAVED.');
+    return;
+  }
   const stamp = echoes.add(settings);
   try {
     await chrome.storage.sync.set({ [SQZ.SETTINGS_KEY]: settings });
-  } catch {
-    // Write throttled/failed — resync the form to what storage really holds.
+    storedJson = json;
+    showSaveError(null);
+  } catch (e) {
+    // Refused after all (the write-rate limit, most likely) — say so, and
+    // resync the form to what storage really holds.
     echoes.drop(stamp);
+    showSaveError(`COULD NOT SAVE — ${e?.message ?? 'STORAGE REFUSED THE WRITE'}`);
     loadSettings();
   }
 }
@@ -384,12 +438,19 @@ function renderShortcut(shortcut) {
   }
 }
 
+// Must mirror manifest.json commands._execute_action.suggested_key: what
+// Chrome will have bound unless the user rebound it.
+const SUGGESTED_SHORTCUT = 'Alt+Shift+S';
+
 async function loadShortcut() {
   try {
     const commands = await chrome.commands.getAll();
     renderShortcut(commands.find((c) => c.name === '_execute_action')?.shortcut);
   } catch {
-    renderShortcut('Alt+Shift+S');
+    // getAll can reject while the extension is mid-reload. The suggested
+    // binding is a better answer than NOT SET on the one page whose job is
+    // to tell the user what the shortcut is.
+    renderShortcut(SUGGESTED_SHORTCUT);
   }
 }
 

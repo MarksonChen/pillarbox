@@ -1,0 +1,30 @@
+<!-- No doctype on purpose: this document loads in QUIRKS mode, where
+     documentElement.clientWidth is the <html> element's own padding box —
+     which the squeeze margins have already narrowed — and body.clientWidth is
+     the viewport. The width lie has to follow that distinction or it
+     subtracts the shift twice on the root. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pillarbox — quirks-mode width metrics</title>
+<style>
+  body { margin: 0; font: 15px/1.6 system-ui, sans-serif; }
+  p { margin: 12px 0; width: 100%; }
+</style>
+</head>
+<body>
+  <div id="probe">quirks-mode metrics probe</div>
+  <div id="content"></div>
+  <script>
+    // Tall enough that the scrollbar state cannot change under the squeeze
+    // (every assertion compares a metric against its own baseline, so an
+    // appearing scrollbar would shift them all by its width).
+    const content = document.getElementById('content');
+    for (let i = 1; i <= 60; i++) {
+      const p = document.createElement('p');
+      p.textContent = `Paragraph ${i}. Quirks-mode filler so the page always scrolls.`;
+      content.append(p);
+    }
+  </script>
+</body>
+</html>
