@@ -8,6 +8,7 @@ var SQZ = globalThis.SQZ ??= {};
 SQZ.panels ??= (() => {
   const HOST_TAG = 'pillarbox-host';
   const DRAG_THRESHOLD = 3;   // px of pointer travel before a drag starts
+  const SLIDE_MS = 160;       // must match the panel transition in CSS
 
   const CSS = `
 :host { all: initial; }
@@ -34,9 +35,18 @@ SQZ.panels ??= (() => {
 :host([data-theme="dark"]) .panel.right { border-left-color: transparent; }
 .panel.left.offscreen { transform: translateX(-100%); }
 .panel.right.offscreen { transform: translateX(100%); }
+/* The other ways a side comes or goes — the dblclick collapse and restore,
+   a reset, a revive, a record arriving from another tab — move the WIDTH,
+   not the transform: collapsing by translating would carry the handle off
+   the screen with the panel and leave nothing to grab it back by. Opt-in per
+   gesture, because the continuous width changes must not lag by even a
+   frame: a drag has to sit exactly under the pointer, and a resize or zoom
+   re-clamp is a correction, not a movement. */
+:host(.gliding) .panel { transition: transform 160ms ease-out, width 160ms ease-out; }
 :host(.dragging) .panel { transition: none; }
 @media (prefers-reduced-motion: reduce) {
-  .panel { transition: none; }
+  .panel,
+  :host(.gliding) .panel { transition: none; }
 }
 .handle {
   position: absolute;
@@ -195,7 +205,28 @@ SQZ.panels ??= (() => {
     applyTheme();
   }
 
-  function setWidths(left, right) {
+  // Let the next width change glide, then take the permission back once it
+  // has played out — so a resize or drag frame arriving later is not caught
+  // mid-glide and dragged along with it. Re-entrant: a second gesture inside
+  // the window simply extends it. (.dragging still overrides, both ways.)
+  let glideTimer = 0;
+
+  function glide() {
+    if (!host) return;
+    const target = host; // an unmount mid-glide must not touch the next host
+    target.classList.add('gliding');
+    clearTimeout(glideTimer);
+    glideTimer = setTimeout(() => {
+      glideTimer = 0;
+      target.classList.remove('gliding');
+    }, SLIDE_MS + 60);
+  }
+
+  // `animate` marks the discrete changes — a gesture, a reset, a record
+  // arriving from another tab — as opposed to tracking a drag, a resize or a
+  // zoom, which must land instantly.
+  function setWidths(left, right, opts) {
+    if (opts?.animate) glide();
     noteWidths({ left, right });
     applyWidths();
   }
@@ -340,8 +371,11 @@ SQZ.panels ??= (() => {
 
   // One-shot width change outside a drag (the dblclick gestures): adopt,
   // paint, and report it like a finished drag so the orchestrator squeezes
-  // and persists through the usual path.
+  // and persists through the usual path. The page reflows at once and the
+  // panel glides over it, which is the same choreography as the toolbar
+  // toggle's slide in and out.
   function setSideWidth(side, target) {
+    glide();
     widths[side] = target;
     noteWidths(widths);
     applyWidths();
@@ -457,6 +491,8 @@ SQZ.panels ??= (() => {
     // finish() can no longer remove it once `host` is nulled below.
     unlockSelection();
     host.classList.remove('dragging');
+    clearTimeout(glideTimer);
+    glideTimer = 0;
     const oldHost = host;
     const oldEls = els;
     host = null;

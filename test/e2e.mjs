@@ -368,6 +368,16 @@ async function main() {
         mr: cs.marginRight,
         mlPrio: de.style.getPropertyPriority('margin-left'),
         host: !!document.querySelector('pillarbox-host'),
+        // Rendered panel widths. Gesture-driven changes glide over ~160ms
+        // while the margins land at once, so anything that then presses at a
+        // handle's coordinates has to wait for the handle to get there.
+        panel: (() => {
+          const root = document.querySelector('pillarbox-host')?.shadowRoot;
+          if (!root) return null;
+          const w = (side) => Math.round(parseFloat(
+            getComputedStyle(root.querySelector('.panel.' + side)).width));
+          return { left: w('left'), right: w('right') };
+        })(),
         nav: rect('navbar'),
         fab: rect('fab'),
         sticky: rect('sticky'),
@@ -576,8 +586,8 @@ async function main() {
     await mouse('mousePressed', 2, 450, 1); await mouse('mouseReleased', 2, 450, 1);
     await mouse('mousePressed', 2, 450, 2); await mouse('mouseReleased', 2, 450, 2);
     await checkFor('dblclick collapses and restores the left side',
-      () => evalIn(page, SNAP), (v) => collapsed && v.ml === '320px',
-      3000, (v) => `collapsed=${collapsed} then ml=${v.ml}`);
+      pageSnap, (v) => collapsed && v.ml === '320px' && v.panel?.left === 320,
+      3000, (v) => `collapsed=${collapsed} then ml=${v.ml} panel=${v.panel?.left}`);
 
     // A drag can start on the SECOND press of a double-click — Chrome's
     // dblclick slop is wider than DRAG_THRESHOLD — and the dblclick that
@@ -672,20 +682,27 @@ async function main() {
     await mouse('mousePressed', 100, 450, 1); await mouse('mouseReleased', 100, 450, 1);
     await mouse('mousePressed', 100, 450, 2); await mouse('mouseReleased', 100, 450, 2);
     await checkFor('dblclick on a sidebar\'s body collapses that side',
-      pageSnap, (v) => v.ml === '0px' && v.mr === '200px', 3000,
-      (v) => `ml=${v.ml} mr=${v.mr} (expected 0/200)`);
+      pageSnap,
+      (v) => v.ml === '0px' && v.mr === '200px' && v.panel?.left === 0, 3000,
+      (v) => `ml=${v.ml} mr=${v.mr} panel=${JSON.stringify(v.panel)} (expected 0/200)`);
     await mouse('mousePressed', 2, 450, 1); await mouse('mouseReleased', 2, 450, 1);
     await mouse('mousePressed', 2, 450, 2); await mouse('mouseReleased', 2, 450, 2);
-    await waitFor(async () => (await pageSnap()).ml === '280px', 3000,
-      'edge handle restores the collapsed side');
+    await waitFor(async () => {
+      const v = await pageSnap();
+      // The panel too, not just the margin: the modifier-dblclick below aims
+      // at x=100, which is only inside the sidebar once it has glided back.
+      return v.ml === '280px' && v.panel?.left === 280;
+    }, 3000, 'edge handle restores the collapsed side');
 
     // Any modifier + double-click on a panel body resets BOTH sides to the
     // defaults (modifier = "both sides", same convention as mirrored drag).
     await mouse('mousePressed', 100, 450, 1, SHIFT); await mouse('mouseReleased', 100, 450, 1, SHIFT);
     await mouse('mousePressed', 100, 450, 2, SHIFT); await mouse('mouseReleased', 100, 450, 2, SHIFT);
     await checkFor('modifier + dblclick on a sidebar restores default widths',
-      pageSnap, (v) => v.ml === '200px' && v.mr === '200px', 3000,
-      (v) => `ml=${v.ml} mr=${v.mr} (expected 200/200)`);
+      pageSnap,
+      (v) => v.ml === '200px' && v.mr === '200px'
+        && v.panel?.left === 200 && v.panel?.right === 200,
+      3000, (v) => `ml=${v.ml} mr=${v.mr} panel=${JSON.stringify(v.panel)} (expected 200/200)`);
 
     // Both sides collapsed -> the page looks un-squeezed and a toggle-off
     // would be invisible; the toolbar click must instead restore this
@@ -702,8 +719,9 @@ async function main() {
     const revive = await toggleViaWorker(`${BASE}/page.html`);
     await checkFor('toolbar click restores defaults when both sides are collapsed',
       pageSnap,
-      (v) => revive?.on === true && v.ml === '200px' && v.mr === '200px' && v.host,
-      3000, (v) => `on=${revive?.on} ml=${v.ml} mr=${v.mr}`);
+      (v) => revive?.on === true && v.ml === '200px' && v.mr === '200px' && v.host
+        && v.panel?.left === 200 && v.panel?.right === 200,
+      3000, (v) => `on=${revive?.on} ml=${v.ml} mr=${v.mr} panel=${JSON.stringify(v.panel)}`);
     // Put the left side back at 320 for the persistence checks below.
     await mouse('mousePressed', 200, 450, 1);
     for (const x of [220, 280, 320]) await mouse('mouseMoved', x, 450);

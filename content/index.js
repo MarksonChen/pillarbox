@@ -417,9 +417,13 @@ if (!SQZ.booted) {
       else phase = 'dormant';
     }
 
-    function applyWidthsToPage() {
+    // `animate` is passed by the callers whose change is a discrete decision
+    // — a reset, a revive, a record arriving from another tab — and withheld
+    // by the ones correcting for something continuous (a zoom, a window
+    // resize), where a gliding panel would visibly trail what it is tracking.
+    function applyWidthsToPage(opts) {
       const { left, right } = effWidths();
-      SQZ.panels.setWidths(left, right);
+      SQZ.panels.setWidths(left, right, opts);
       SQZ.squeeze.update(left, right);
       SQZ.mediaQueries.update(left, right); // no-op when off; coalesces itself
       SQZ.fixedBars.update(left, right);
@@ -450,7 +454,7 @@ if (!SQZ.booted) {
               // are 0/0 as well: reviving to nothing would leave the button
               // with no reachable off state at all, so fall through instead.
               await persist({ on: true, ...dw });
-              if (idle()) applyWidthsToPage();
+              if (idle()) applyWidthsToPage({ animate: true });
             } else if (phase === 'active') {
               disable();
               await persist({ on: false });
@@ -544,7 +548,9 @@ if (!SQZ.booted) {
       } else if (phase === 'dormant') {
         enable();
       } else if (idle()) {
-        applyWidthsToPage();
+        // A record that moved elsewhere (another tab, an SPA navigation to a
+        // URL with its own widths) is a decision, not a correction.
+        applyWidthsToPage({ animate: true });
       }
     }
 
@@ -586,7 +592,7 @@ if (!SQZ.booted) {
       // page's defaults (URL rule or global). persist() updates rec
       // synchronously before writing.
       persist({ on: true, ...defaultWidths() });
-      applyWidthsToPage();
+      applyWidthsToPage({ animate: true });
     }
 
     function onResize() {

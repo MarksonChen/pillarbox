@@ -69,6 +69,20 @@ panels, so page CSS cannot restyle them. The host also pins
 custom elements as an anti-flicker guard (reddit's
 `:not(:defined){visibility:hidden}`).
 
+Every way a side comes or goes takes the same 160 ms: the toolbar toggle
+slides the panel in and out on `transform`, and the dblclick collapse and
+restore, the reset, the both-collapsed revive and a record arriving from
+another tab glide the `width`. Width rather than transform for those, because
+collapsing by translating would carry the handle off the screen with the
+panel and leave nothing to grab it back by. In every case the page reflows at
+once and the panel moves over it — the margins are never animated, which
+would mean reflowing the whole document each frame. The glide is opt-in per
+change (`setWidths(..., {animate: true})`, and a `.gliding` class held for the
+duration) because the continuous ones must not lag by even a frame: a drag has
+to sit exactly under the pointer, and a resize or zoom re-clamp is a
+correction, not a movement. `.dragging` overrides it either way, and
+`prefers-reduced-motion` turns all of it off.
+
 **Fixed bars and app shells.** `position:fixed` boxes are laid out against the
 viewport, and `position:absolute` boxes with no positioned ancestor (SPA app
 shells like claude.ai's `absolute inset-0` root) are anchored to the initial
