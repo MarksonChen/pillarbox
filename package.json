@@ -1,0 +1,17 @@
+{
+  "name": "pillarbox-extension",
+  "version": "0.12.0",
+  "private": true,
+  "scripts": {
+    "lint": "eslint .",
+    "test:unit": "node --test test/unit.mjs",
+    "test:e2e": "node test/e2e.mjs",
+    "check": "npm run lint && npm run test:unit",
+    "test": "npm run check && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.1",
+    "globals": "^17.9.0"
+  }
+}

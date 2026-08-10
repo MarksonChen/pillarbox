@@ -300,7 +300,7 @@ $('#tintHex').addEventListener('change', () => {
 // recEpoch, for the same race on the other side of storage.
 let saveEpoch = 0;
 
-async function loadSettings() {
+async function loadSettings({ clearError = true } = {}) {
   const epoch = saveEpoch;
   const raw = await chrome.storage.sync.get(SQZ.SETTINGS_KEY);
   if (epoch !== saveEpoch) return;
@@ -317,7 +317,7 @@ async function loadSettings() {
   applyPageTheme(s.theme);
   syncTints();
   storedJson = JSON.stringify(formState());
-  showSaveError(null);
+  if (clearError) showSaveError(null);
 }
 
 // Our own saves must not re-render the form (that would stomp an edit in
@@ -347,8 +347,8 @@ function showSaveError(message) {
   box.hidden = !message;
 }
 
-async function saveSettings() {
-  saveEpoch++;
+async function saveSettings(write = (value) => chrome.storage.sync.set(value)) {
+  const epoch = ++saveEpoch;
   const settings = formState();
   $('#defaultLeft').value = settings.defaultLeft; // reflect clamping
   $('#defaultRight').value = settings.defaultRight;
@@ -370,20 +370,25 @@ async function saveSettings() {
   }
   const stamp = echoes.add(settings);
   try {
-    await chrome.storage.sync.set({ [SQZ.SETTINGS_KEY]: settings });
-    storedJson = json;
-    showSaveError(null);
+    await write({ [SQZ.SETTINGS_KEY]: settings });
+    if (epoch === saveEpoch) {
+      storedJson = json;
+      showSaveError(null);
+    }
   } catch (e) {
     // Refused after all (the write-rate limit, most likely) — say so, and
     // resync the form to what storage really holds.
     echoes.drop(stamp);
-    showSaveError(`COULD NOT SAVE — ${e?.message ?? 'STORAGE REFUSED THE WRITE'}`);
-    loadSettings();
+    const message = `COULD NOT SAVE — ${e?.message ?? 'STORAGE REFUSED THE WRITE'}`;
+    try { await loadSettings({ clearError: false }); } catch {}
+    // A newer edit owns the status now; otherwise report AFTER the reload so
+    // loadSettings cannot immediately erase the error it was meant to explain.
+    if (epoch === saveEpoch) showSaveError(message);
   }
 }
 
 const form = $('#settingsForm');
-form.addEventListener('change', saveSettings);
+form.addEventListener('change', () => { saveSettings(); });
 form.addEventListener('input', syncTints); // live while picking colors
 
 // The giant width numbers select as a block — every focus or click selects

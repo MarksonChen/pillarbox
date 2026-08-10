@@ -5,7 +5,7 @@
 // cleanup of pre-release storage, the LRU prune of page records, the
 // chrome.tabs zoom relay, and the private-network-guarded fetch of
 // cross-origin stylesheet text.
-importScripts('shared/defaults.js');
+importScripts('shared/defaults.js', 'shared/css-relay.js');
 
 // Pre-release builds stored one record per origin under 'site:'; the schema
 // is now one record per page URL under 'page:'. Drop the dead data once.
@@ -83,51 +83,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 const CSS_FETCH_TIMEOUT = 15000;
 const CSS_BUDGET = 8 * 1024 * 1024; // total bytes across one import tree
 const CSS_IMPORT_DEPTH = 3;
-
-// Is this host on the private side of the network? The relay fetches with the
-// extension's <all_urls> reach, so without a guard a page Pillarbox is active
-// on could point a <link rel=stylesheet> at something only the browser's host
-// can see — a router admin page, a cloud metadata endpoint — and then read the
-// response back out of the <style> clone, which lives in the page's own DOM.
-// Literal matching cannot follow a rebinding DNS name, so this is hardening
-// rather than a boundary.
-function isPrivateHost(hostname) {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (host === '::1' || host.startsWith('::ffff:127.')) return true;
-  if (/^(?:fc|fd)[0-9a-f]{2}:/.test(host) || host.startsWith('fe80:')) return true;
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
-  if (!v4) return false;
-  const a = Number(v4[1]);
-  const b = Number(v4[2]);
-  return a === 0 || a === 127 || a === 10
-    || (a === 169 && b === 254)               // link-local, metadata services
-    || (a === 192 && b === 168)
-    || (a === 172 && b >= 16 && b <= 31);
-}
-
-// `from` is the URL of the page that asked. A private target is allowed only
-// when that page is itself on a private address: a localhost dev site or an
-// intranet app linking its own stylesheets is the ordinary case and has to
-// keep working, and it can already read those origins' own responses. What
-// this refuses is the escalation — a PUBLIC page reaching into the LAN, or
-// into the loopback interface, through our host permission.
-function relayable(url, from) {
-  let u = null;
-  try { u = new URL(url); } catch { return false; }
-  if (!/^https?:$/i.test(u.protocol)) return false;
-  if (!isPrivateHost(u.hostname)) return true;
-  let asker = null;
-  try { asker = new URL(from); } catch { return false; }
-  return isPrivateHost(asker.hostname);
-}
+const RELAY = SQZ.cssRelay;
 
 async function fetchCssFile(url, budget, from) {
-  if (!relayable(url, from)) return null; // also covers @import targets
+  if (!RELAY.relayable(url, from)) return null; // also covers @import targets
   let res;
   try {
     res = await fetch(url, {
       credentials: 'omit',
+      redirect: 'error',
       signal: AbortSignal.timeout(CSS_FETCH_TIMEOUT),
     });
   } catch {
@@ -139,101 +103,32 @@ async function fetchCssFile(url, budget, from) {
     // content script then sees only a dead channel.
     chrome.runtime.getPlatformInfo().catch(() => {});
   }
-  if (!res.ok) return null;
-  const text = await res.text().catch(() => null);
-  if (text === null) return null;
-  budget.left -= text.length;
-  return budget.left < 0 ? null : text;
-}
+  if (!res.ok || res.redirected || !RELAY.relayable(res.url, from)) return null;
+  const mime = (res.headers.get('content-type') ?? '').split(';', 1)[0].trim().toLowerCase();
+  if (mime !== 'text/css') return null;
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > budget.left) return null;
 
-// Rewrite url(...) references (and any @import url we leave behind) to be
-// absolute. Skips absolute schemes, data:/blob:, protocol-relative //, and
-// bare #fragments (same-document SVG paint servers must stay relative).
-function absolutizeCssUrls(text, baseUrl) {
-  const resolve = (v) => {
-    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(v) || v === '') return null;
-    try { return new URL(v, baseUrl).href; } catch { return null; }
-  };
-  text = text.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"\s]+))\s*\)/gi,
-    (m, dq, sq, bare) => {
-      const abs = resolve(dq ?? sq ?? bare);
-      return abs === null ? m : `url("${abs.replace(/"/g, '%22')}")`;
-    });
-  // String-form @import ('@import "x.css";') for the chains left in place
-  // when the depth or byte budget runs out.
-  text = text.replace(/(@import\s+)(?:"([^"]*)"|'([^']*)')/gi, (m, head, dq, sq) => {
-    const abs = resolve(dq ?? sq);
-    return abs === null ? m : `${head}"${abs.replace(/"/g, '%22')}"`;
-  });
-  return text;
-}
-
-// Split the leading import statements off a stylesheet: only @charset,
-// @layer statements and @import may precede other rules, so a small scan
-// from the top is exact enough. Comments between them are skipped; the body
-// is left untouched.
-function splitCssImports(text) {
-  const imports = [];
-  let prefix = '';
-  let i = 0;
-  for (;;) {
-    const ws = /^(?:\s+|\/\*[\s\S]*?\*\/)+/.exec(text.slice(i));
-    if (ws) i += ws[0].length;
-    const rest = text.slice(i);
-    let m;
-    if ((m = /^@charset\s+"[^"]*"\s*;/i.exec(rest))) {
-      i += m[0].length; // dropped: the text is already decoded
-    } else if ((m = /^@layer\s+[^{;]*;/i.exec(rest))) {
-      prefix += m[0] + '\n'; // layer-order statement: keep, order matters
-      i += m[0].length;
-    } else if ((m = /^@import\s+(?:url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"]*?))\s*\)|"([^"]*)"|'([^']*)')\s*([^;]*);/i.exec(rest))) {
-      imports.push({
-        url: (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? '').trim(),
-        tail: m[6].trim(),
-        raw: m[0],
-      });
-      i += m[0].length;
-    } else {
-      break;
+  const reader = res.body?.getReader();
+  if (!reader) return null;
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      budget.left -= value.byteLength;
+      if (budget.left < 0) {
+        await reader.cancel();
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
     }
+    return text + decoder.decode();
+  } catch {
+    try { await reader.cancel(); } catch {}
+    return null;
   }
-  return { prefix, imports, body: text.slice(i) };
-}
-
-// An import's condition tail becomes equivalent wrapper blocks around the
-// inlined text: layer(name)/layer -> @layer, supports(...) -> @supports,
-// the rest is a media query -> @media.
-function wrapImportedCss(text, tail) {
-  let media = tail;
-  const layer = /^layer(?:\(([^)]*)\))?\s*/i.exec(media);
-  if (layer) media = media.slice(layer[0].length);
-  const sup = /^supports\(((?:[^()]|\([^()]*\))*)\)\s*/i.exec(media);
-  if (sup) media = media.slice(sup[0].length);
-  media = media.trim();
-  if (media && media.toLowerCase() !== 'all') text = `@media ${media} {\n${text}\n}`;
-  if (sup) text = `@supports ${sup[1]} {\n${text}\n}`;
-  if (layer) text = `@layer ${layer[1] ? layer[1].trim() + ' ' : ''}{\n${text}\n}`;
-  return text;
-}
-
-async function inlineCss(url, budget, depth, seen, from) {
-  if (seen.has(url)) return ''; // import cycle: drop the repeat
-  seen.add(url);
-  let text = await fetchCssFile(url, budget, from);
-  if (text === null) return null;
-  text = absolutizeCssUrls(text, url);
-  const { prefix, imports, body } = splitCssImports(text);
-  let out = prefix;
-  for (const imp of imports) {
-    // Recurse while depth and budget allow; otherwise keep the (already
-    // absolutized) @import — the page fetches it natively, styled but
-    // unshifted, which beats dropping the rules wholesale.
-    const child = depth > 0 && /^https?:/i.test(imp.url)
-      ? await inlineCss(imp.url, budget, depth - 1, seen, from)
-      : null;
-    out += (child === null ? imp.raw : wrapImportedCss(child, imp.tail)) + '\n';
-  }
-  return out + body;
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -243,11 +138,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // sender.origin/url is set by the browser, not by the page, so it is a
   // trustworthy answer to "who is asking" for the private-target check.
   const from = sender.origin ?? sender.url ?? '';
-  if (!relayable(url, from)) {
+  if (!RELAY.relayable(url, from)) {
     sendResponse({ ok: false });
     return;
   }
-  inlineCss(url, { left: CSS_BUDGET }, CSS_IMPORT_DEPTH, new Set(), from)
+  RELAY.inlineCss(url, { left: CSS_BUDGET }, CSS_IMPORT_DEPTH, new Set(), from, fetchCssFile)
     .then((text) => sendResponse(text === null ? { ok: false } : { ok: true, text }))
     .catch(() => sendResponse({ ok: false }));
   return true; // keep the channel open for the async response

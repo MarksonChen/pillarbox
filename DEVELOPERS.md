@@ -10,6 +10,7 @@ user's point of view, see [README.md](README.md).
 manifest.json          extension wiring
 background.js          service worker: icon click -> toggle message (+ inject fallback), zoom relay, cross-origin CSS fetch (private-network guarded)
 shared/defaults.js     constants shared by all contexts
+shared/css-relay.js    pure URL policy + CSS import traversal for the worker
 shared/mq-shift.js     the width-shift text transform, loaded by BOTH worlds
 content/squeeze.js     html-margin reflow + style watcher
 content/media-queries.js  breakpoint shifter (width media features see the squeezed width)
@@ -118,7 +119,11 @@ and absolute ones additionally not under a merely positioned one; a box that
 loses its anchoring later (an ancestor gaining a transform, or the box itself
 swapping `fixed` for `absolute` the way scroll-docking headers do) is released
 rather than squeezed twice. A `MutationObserver` catches bars added later or
-turned fixed by a class change; because a class on an *ancestor* can reveal a
+turned fixed by a class change. Containing-block detection includes the
+individual `translate`/`rotate`/`scale` properties, `backdrop-filter`,
+`transform-style:preserve-3d`, `content-visibility` and container containment,
+not just the older `transform`/`filter`/`perspective` shorthands. Because a
+class on an *ancestor* can reveal a
 bar without touching the bar itself (`body.scrolled .footer`), a mutated
 element's subtree is also re-examined, coalesced on a 300 ms timer. It watches
 `class`, `style` and `hidden` (clearing `hidden` reveals a bar without
@@ -164,11 +169,15 @@ permission). That reach is the reason the relay carries a private-network
 guard: the fetched body lands in a `<style>` clone inside the page's own DOM,
 so without one, a page the extension is active on could name an address only
 the browser's host can reach (a router page, a metadata endpoint) and read the
-answer back out. A private target is allowed only when the asking page is
-itself on a private address — `sender.origin` is set by the browser, not the
-page — which keeps localhost dev sites and intranet apps working. Opaque
+answer back out. Public pages may relay only HTTPS sheets (TLS is the DNS-
+rebinding boundary a hostname check cannot provide); a private target is
+allowed only from a private page on the same host, though ports may differ for
+localhost development. `sender.origin` is set by the browser, not the page.
+Redirects and non-`text/css` responses are rejected, and bodies are streamed
+under the shared byte budget rather than buffered before the limit. Opaque
 sheets are fetched there, `@import` chains inlined
-(depth 3, cycle- and byte-capped, conditions rewritten as equivalent
+(depth 3, active-path cycle- and byte-capped, repeated imports preserved at
+each cascade location, conditions rewritten as equivalent
 `@layer`/`@supports`/`@media` wrappers) and `url()`s absolutized against the
 sheet's own URL (a clone parses at the document base). The text is replayed
 in a `<style>` clone inserted at the owner `<link>` — content-script-
@@ -182,7 +191,8 @@ anchor, so inserting on completion would order them by download speed and
 invert the cascade between them. An `@import`'s own `layer()`/`supports()`
 conditions are wrapped around the clone's text (the media condition rides its
 `media` attribute) — dropping them would float the rules out of their cascade
-layer, where unlayered beats layered. The original is turned off via
+layer, where unlayered beats layered. A sheet already disabled by the page is
+never cloned. Otherwise the original is turned off via
 `sheet.disabled` — the CSSOM flag, NOT `link.disabled`, whose attribute
 round-trip re-fetches the sheet asynchronously and leaves the page unstyled
 for a moment on restore — and only once the clone actually holds its text.
@@ -191,9 +201,12 @@ sheet we cloned (an `href` swap mints a new `CSSStyleSheet`; `link.disabled`
 detaches it), and it runs even at shift 0, where the clones are deliberately
 kept alive and a `<link>` removal would otherwise leave the page wearing a
 stylesheet it had just unloaded. Sheets added later are caught by a childList
-observer; rules added through `insertRule` (styled-components) mutate no DOM
-node, so a 2s rule-count poll covers those. A media flip can
-restyle a bar without touching any attribute — invisible to the fixed-bar
+observer; rules added through `insertRule` (styled-components) and direct
+`mediaText` assignments mutate no DOM node, so a 2s full rule walk covers
+nested insertions and unchanged top-level counts too. Each registry entry
+remembers the exact normalized text Pillarbox last wrote; a different live
+value is rebased as page-owned and survives later drags and toggle-off. A
+media flip can restyle a bar without touching any attribute — invisible to the fixed-bar
 observer — so every shift application nudges `fixedBars.update()`, whose
 debounced rescan re-adopts whatever the new layout revealed. Printing runs
 `stop()` first: print media evaluates width against the paper size, and a
@@ -388,13 +401,15 @@ Two typographic details are easy to undo by accident:
   the toolbar-click injection — too late to retrofit lists their scripts
   already made. Those pages reflow fully after their next reload.
 - Stylesheets inside shadow roots are not shifted (web-components sites).
-- A stylesheet served from a private address (`10.x`, `192.168.x`, loopback)
-  keeps its native breakpoints on a public page: the relay refuses that
-  fetch. Same-network pages are unaffected.
+- A private-address stylesheet keeps its native breakpoints unless the page is
+  itself on that exact private host. Public-page cross-origin sheets must use
+  HTTPS; refused sheets remain styled natively but their breakpoints cannot be
+  shifted.
 - The settings object lives in one `chrome.storage.sync` item, capped at 8 KB.
   A rules list that would exceed it is refused with a message rather than
   silently dropped.
-- While a cross-origin sheet is being stood in for by a clone, our
+- A cross-origin sheet already disabled by the page stays disabled and is
+  never cloned. While an enabled sheet is being stood in for by a clone, our
   `sheet.disabled` is indistinguishable from the page's own: a script that
   turns that stylesheet off through the CSSOM sees nothing change (the clone
   keeps styling) and reads the flag back already true. Inherent to the
@@ -424,15 +439,19 @@ python3 -m http.server 8080 --directory test
 open http://localhost:8080/page.html     # Windows: start http://localhost:8080/page.html
 ```
 
-Automated (needs Node ≥ 22 and Chrome for Testing — branded Chrome ≥ 137
-ignores `--load-extension`):
+Automated checks need Node ≥ 22. Install the development dependencies once;
+`npm run check` runs ESLint plus the fast pure-function regressions. The full
+suite additionally needs Chrome for Testing — branded Chrome ≥ 137 ignores
+`--load-extension`:
 
 ```sh
+npm install
+npm run check
 npx @puppeteer/browsers install chrome@stable --path .cft   # once, ~150 MB
-node test/e2e.mjs
+npm test
 ```
 
-Both commands are the same on macOS, Linux and Windows: `findChrome()` probes
+The browser commands are the same on macOS, Linux and Windows: `findChrome()` probes
 every Chrome-for-Testing platform layout under `.cft` and falls back to a
 locally installed **Chromium** (never branded Chrome, which would run the
 suite extensionless and fail everything for the wrong reason). Point it
@@ -447,7 +466,7 @@ than aborting the process and hiding every later result. Only the two
 pre-flight waits — the devtools endpoint and finding the extension's service
 worker — still throw, because nothing can run without them.
 
-The script launches a throwaway headless profile, toggles via the real message
+The script launches and removes a throwaway headless profile, toggles via the real message
 path, and asserts reflow, fixed-bar insetting (including a percentage
 `min-width`, a bar revealed by clearing `hidden`, and a scroll-dock bar
 released when it swaps `fixed` for `absolute`), per-page auto-restore after
@@ -466,9 +485,12 @@ inline/nested/range/em breakpoints flip, orientation goes portrait, a
 `<link media>` gate re-evaluates without touching the attribute, sibling
 cross-origin imports keep document order against a deliberately slow one, a
 layered import's clone stays inside its cascade layer, the
-cross-origin clone inlines its `@import`, absolutizes `url()`s and keeps
-cascade order, insertRule-added rules get picked up, updates re-derive from
-originals, and toggle-off restores mediaTexts verbatim), and the MAIN-world
+cross-origin clone inlines its `@import`, preserves repeated imports,
+absolutizes `url()`s and keeps cascade order, disabled sheets stay inert,
+redirect/non-CSS relay responses are refused, top-level and nested
+insertRule-added rules get picked up, page-written mediaTexts are rebased,
+updates re-derive from originals, and toggle-off restores the latest page
+text verbatim), and the MAIN-world
 matchMedia hook (page-held lists minted before the squeeze flip through
 addListener/onchange/addEventListener with the original media text intact,
 lists minted mid-squeeze are born shifted, orientation tracks the effective

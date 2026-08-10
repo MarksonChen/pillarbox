@@ -182,14 +182,17 @@ if (!SQZ.booted) {
           for (const prop of ['left', 'right', 'width']) s.removeProperty(prop);
         }
       }
-      // A dead previous world's cross-origin clones: remove each and
-      // re-enable the sheet it shadowed. (Its in-place mediaText edits are
-      // unrecoverable without that world's registry — the resize poke above
-      // is what handles those, by making the old life restore them itself.)
+      // A dead previous world's cross-origin clones: remove each and re-enable
+      // its sheet only when the clone records that the old life disabled it.
+      // Empty/failed clones never own the page's disabled state. (In-place
+      // mediaText edits are unrecoverable without that world's registry — the
+      // resize poke above makes the old life restore those itself.)
       for (const el of document.querySelectorAll('style[data-pillarbox-mq]')) {
         const href = el.getAttribute('data-pillarbox-mq');
-        for (const sheet of document.styleSheets) {
-          if (sheet.href === href && sheet.disabled) sheet.disabled = false;
+        if (el.hasAttribute('data-pillarbox-mq-disabled')) {
+          for (const sheet of document.styleSheets) {
+            if (sheet.href === href && sheet.disabled) sheet.disabled = false;
+          }
         }
         el.remove();
       }

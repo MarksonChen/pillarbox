@@ -47,15 +47,24 @@ SQZ.fixedBars ??= (() => {
     return position === 'fixed' || position === 'absolute' ? 'inset' : 'flow';
   }
 
-  // transform / filter / perspective / will-change / contain make an element
-  // the containing block for FIXED descendants as well as absolute ones —
-  // that is what can silently re-anchor a bar we already adopted. Only
-  // absolute boxes are additionally captured by a merely positioned ancestor.
+  // Transforms, filters, containment and their modern longhands make an
+  // element the containing block for FIXED descendants as well as absolute
+  // ones — that is what can silently re-anchor a bar we already adopted.
+  // Only absolute boxes are additionally captured by a positioned ancestor.
   function makesContainingBlock(cs, position) {
-    return cs.transform !== 'none'
-      || cs.filter !== 'none'
-      || cs.perspective !== 'none'
-      || /transform|perspective|filter/.test(cs.willChange || '')
+    const active = (value, initial = 'none') => Boolean(value) && value !== initial;
+    return active(cs.transform)
+      || active(cs.translate)
+      || active(cs.rotate)
+      || active(cs.scale)
+      || active(cs.filter)
+      || active(cs.backdropFilter)
+      || active(cs.perspective)
+      || cs.transformStyle === 'preserve-3d'
+      || cs.contentVisibility === 'auto'
+      || cs.contentVisibility === 'hidden'
+      || active(cs.containerType, 'normal')
+      || /transform|translate|rotate|scale|perspective|filter|backdrop-filter|transform-style/.test(cs.willChange || '')
       || /layout|paint|strict|content/.test(cs.contain || '')
       || (position === 'absolute' && cs.position !== 'static');
   }
