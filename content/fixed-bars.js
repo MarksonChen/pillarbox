@@ -47,6 +47,24 @@ SQZ.fixedBars ??= (() => {
     return position === 'fixed' || position === 'absolute' ? 'inset' : 'flow';
   }
 
+  // will-change naming a property that WOULD create a containing block makes
+  // the element one up front. Parsed as the comma-separated list of property
+  // names it actually is, rather than substring-matched: `transform-origin`
+  // and `transform-box` create nothing yet contain the substring `transform`
+  // (so a wrapper hinting at either released the site's fixed header), while
+  // `contain`, `content-visibility` and `container-type` do create one and
+  // share no substring with the old alternation at all.
+  const WILL_CHANGE_CONTAINING = new Set([
+    'transform', 'translate', 'rotate', 'scale', 'perspective', 'filter',
+    'backdrop-filter', 'transform-style', 'contain', 'content-visibility',
+    'container-type',
+  ]);
+
+  function willChangeContains(value) {
+    if (!value) return false;
+    return value.split(',').some((name) => WILL_CHANGE_CONTAINING.has(name.trim().toLowerCase()));
+  }
+
   // Transforms, filters, containment and their modern longhands make an
   // element the containing block for FIXED descendants as well as absolute
   // ones — that is what can silently re-anchor a bar we already adopted.
@@ -64,7 +82,7 @@ SQZ.fixedBars ??= (() => {
       || cs.contentVisibility === 'auto'
       || cs.contentVisibility === 'hidden'
       || active(cs.containerType, 'normal')
-      || /transform|translate|rotate|scale|perspective|filter|backdrop-filter|transform-style/.test(cs.willChange || '')
+      || willChangeContains(cs.willChange)
       || /layout|paint|strict|content/.test(cs.contain || '')
       || (position === 'absolute' && cs.position !== 'static');
   }

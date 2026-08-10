@@ -273,6 +273,11 @@ async function main() {
     } else if (u === '/redirect.css') {
       res.writeHead(302, { location: `http://127.0.0.1:${PORT2}/mq-import.css` });
       res.end();
+    } else if (u === '/redirect-to-noncss.css') {
+      // Lands on a body the relay must refuse: proves the response is still
+      // fully validated AFTER the redirect is followed, not just before.
+      res.writeHead(302, { location: `http://127.0.0.1:${PORT2}/not-css` });
+      res.end();
     } else if (u === '/not-css') {
       res.setHeader('content-type', 'text/plain');
       res.end('not a stylesheet');
@@ -1817,6 +1822,7 @@ async function main() {
       return {
         repeat: await ask('http://127.0.0.1:${PORT2}/repeat-root.css'),
         redirect: await ask('http://127.0.0.1:${PORT2}/redirect.css'),
+        redirectOff: await ask('http://127.0.0.1:${PORT2}/redirect-to-noncss.css'),
         mime: await ask('http://127.0.0.1:${PORT2}/not-css'),
       };
     })()`);
@@ -1826,9 +1832,18 @@ async function main() {
         && relay.repeat.text.includes('@layer first')
         && relay.repeat.text.includes('@layer second'),
       JSON.stringify({ ok: relay.repeat?.ok, occurrences: repeated.length }));
-    check('relay rejects redirects and non-CSS response bodies',
-      relay.redirect?.ok === false && relay.mime?.ok === false,
-      JSON.stringify({ redirect: relay.redirect, mime: relay.mime }));
+    // Redirects are followed, not refused — CDN version aliases and
+    // http->https upgrades all redirect, and refusing them blacklists the
+    // sheet for the page's life. Safety comes from re-running the URL policy
+    // and the MIME check on the response that actually arrived, so a redirect
+    // that lands somewhere the relay would not have fetched is still refused.
+    check('relay follows a redirect to an allowed stylesheet',
+      relay.redirect?.ok === true && String(relay.redirect.text).includes('#imp'),
+      JSON.stringify(relay.redirect));
+    check('relay still validates the response a redirect lands on',
+      relay.redirectOff?.ok === false, JSON.stringify(relay.redirectOff));
+    check('relay rejects non-CSS response bodies',
+      relay.mime?.ok === false, JSON.stringify(relay.mime));
 
     // shiftText unit battery, in the content-script world.
     const B = await evalIn(sw, `(async () => {

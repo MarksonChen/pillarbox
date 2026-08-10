@@ -182,16 +182,31 @@ if (!SQZ.booted) {
           for (const prop of ['left', 'right', 'width']) s.removeProperty(prop);
         }
       }
-      // A dead previous world's cross-origin clones: remove each and re-enable
-      // its sheet only when the clone records that the old life disabled it.
-      // Empty/failed clones never own the page's disabled state. (In-place
-      // mediaText edits are unrecoverable without that world's registry — the
-      // resize poke above makes the old life restore those itself.)
+      // A dead previous world's cross-origin clones. Undo its disables first,
+      // by element identity: that life tagged the very node whose sheet it
+      // turned off, so nothing the PAGE disabled for its own reasons — an
+      // alternate theme at the same URL — gets switched back on underneath it.
+      // Empty/failed clones never own the page's disabled state and tag
+      // nothing. (In-place mediaText edits are unrecoverable without that
+      // world's registry — the resize poke above makes the old life restore
+      // those itself.)
+      for (const node of document.querySelectorAll('[data-pillarbox-mq-off]')) {
+        try { if (node.sheet?.disabled) node.sheet.disabled = false; } catch {}
+        node.removeAttribute('data-pillarbox-mq-off');
+      }
       for (const el of document.querySelectorAll('style[data-pillarbox-mq]')) {
-        const href = el.getAttribute('data-pillarbox-mq');
-        if (el.hasAttribute('data-pillarbox-mq-disabled')) {
+        // Clones from before that tag existed recorded ownership only on
+        // themselves and never said WHICH element they shadowed. Those lives
+        // always disabled what they cloned, so fall back to the href match
+        // they relied on — first hit only, to bound the collateral — or the
+        // sheet stays dark for the rest of the page's life after an update.
+        if (!el.hasAttribute('data-pillarbox-mq-v')) {
+          const href = el.getAttribute('data-pillarbox-mq');
           for (const sheet of document.styleSheets) {
-            if (sheet.href === href && sheet.disabled) sheet.disabled = false;
+            if (sheet.href === href && sheet.disabled) {
+              sheet.disabled = false;
+              break;
+            }
           }
         }
         el.remove();

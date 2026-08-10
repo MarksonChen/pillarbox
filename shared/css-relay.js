@@ -19,9 +19,19 @@ SQZ.cssRelay ??= (() => {
   }
 
   // URL() canonicalizes unusual IPv4 spellings (integer/octal/hex) and IPv6,
-  // but hostname still carries brackets around IPv6 literals in Chrome.
-  function parseIp(hostname) {
-    const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  // but hostname still carries brackets around IPv6 literals in Chrome, and
+  // it keeps the root label's trailing dot on registrable names (it strips
+  // one only from IPv4 literals). "localhost." and "localhost" name the same
+  // host to DNS and to the network stack but not to ===, so recognising only
+  // one of them is a private-network bypass: a public page asking for
+  // https://localhost.:8443/ would otherwise classify as a public target and
+  // be relayed. Every host comparison and classification goes through here.
+  function canonHost(hostname) {
+    return String(hostname).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  }
+
+  // Takes an already-canonical host.
+  function parseIp(host) {
     if (/^\d+(?:\.\d+){3}$/.test(host)) {
       return { v4: host.split('.').map(Number), v6: null };
     }
@@ -29,9 +39,27 @@ SQZ.cssRelay ??= (() => {
 
     const halves = host.split('::');
     if (halves.length > 2) return { v4: null, v6: null };
-    const readHalf = (part) => part ? part.split(':').map((word) => parseInt(word, 16)) : [];
+    // A trailing dotted quad is legal IPv6 spelling (::ffff:8.8.8.8) and is
+    // worth two words, not one: parseInt('8.8.8.8', 16) quietly yields 8,
+    // which shifts every later word along and made the embedded-IPv4 read
+    // land on the wrong pair — classifying public mapped addresses private.
+    const readHalf = (part) => {
+      if (!part) return [];
+      const words = part.split(':');
+      const last = words[words.length - 1];
+      if (!last.includes('.')) return words.map((word) => parseInt(word, 16));
+      if (!/^\d+(?:\.\d+){3}$/.test(last)) return null;
+      const quad = last.split('.').map(Number);
+      if (quad.some((n) => n > 255)) return null;
+      return [
+        ...words.slice(0, -1).map((word) => parseInt(word, 16)),
+        (quad[0] << 8) | quad[1],
+        (quad[2] << 8) | quad[3],
+      ];
+    };
     const left = readHalf(halves[0]);
     const right = readHalf(halves[1] ?? '');
+    if (!left || !right) return { v4: null, v6: null };
     if ([...left, ...right].some((word) => !Number.isInteger(word) || word < 0 || word > 0xffff)) {
       return { v4: null, v6: null };
     }
@@ -43,7 +71,7 @@ SQZ.cssRelay ??= (() => {
   }
 
   function isPrivateHost(hostname) {
-    const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    const host = canonHost(hostname);
     if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
     const { v4, v6 } = parseIp(host);
     if (v4) return privateV4(v4);
@@ -71,17 +99,38 @@ SQZ.cssRelay ??= (() => {
     }
   }
 
+  // Loopback answers to three spellings and a dev server is routinely reached
+  // by more than one of them (localhost in the address bar, 127.0.0.1 in a
+  // stylesheet href). They name the same machine, so the same-host rule below
+  // counts them as one host rather than refusing the pair.
+  function isLoopback(hostname) {
+    const host = canonHost(hostname);
+    if (host === 'localhost' || host.endsWith('.localhost')) return true;
+    const { v4, v6 } = parseIp(host);
+    if (v4) return v4[0] === 127;
+    if (v6) return v6.slice(0, 7).every((word) => word === 0) && v6[7] === 1;
+    return false;
+  }
+
   // Private pages may relay only to the same private host (a different dev
-  // port is fine). Public pages get HTTPS targets only: TLS authentication is
-  // the DNS-rebinding boundary that hostname string checks cannot provide.
+  // port is fine, and the loopback spellings all count as that same host).
+  // Public pages get HTTPS targets only: TLS authentication is the
+  // DNS-rebinding boundary that hostname string checks cannot provide.
   function relayable(value, from) {
     const url = httpUrl(value);
-    const asker = httpUrl(from);
-    if (!url || !asker) return false;
+    if (!url) return false;
     const targetPrivate = isPrivateHost(url.hostname);
+    const asker = httpUrl(from);
+    // An asker that is not http(s) — a file:// page (a documented mode), an
+    // opaque origin — is treated as public rather than refused outright: it
+    // gets exactly what any public page gets, public HTTPS and nothing
+    // private. Refusing it instead silently turned the relay off there.
+    if (!asker) return !targetPrivate && url.protocol === 'https:';
     const askerPrivate = isPrivateHost(asker.hostname);
     if (targetPrivate) {
-      return askerPrivate && url.hostname.toLowerCase() === asker.hostname.toLowerCase();
+      return askerPrivate
+        && (canonHost(url.hostname) === canonHost(asker.hostname)
+          || (isLoopback(url.hostname) && isLoopback(asker.hostname)));
     }
     if (askerPrivate) return true;
     return url.protocol === 'https:';
@@ -152,19 +201,30 @@ SQZ.cssRelay ??= (() => {
 
   // active is the current recursion path, not a global visited set. Repeating
   // one child at two cascade locations must emit it twice; only a true cycle
-  // back into an ancestor is dropped.
-  async function inlineCss(url, budget, depth, active, from, fetchFile) {
+  // back into an ancestor is dropped. `cache` is what keeps that from costing
+  // a fetch per occurrence: a design system whose every partial imports one
+  // variables.css is the common shape, and refetching per occurrence goes
+  // exponential in the depth — enough to outlive the MV3 worker and lose the
+  // reply, while hammering the origin. Text (and a failure) is remembered for
+  // the life of one relay call, so the budget is charged once per URL too.
+  async function inlineCss(url, budget, depth, active, from, fetchFile, cache = new Map()) {
     if (active.has(url)) return '';
     active.add(url);
     try {
-      let source = await fetchFile(url, budget, from);
+      let source;
+      if (cache.has(url)) {
+        source = cache.get(url);
+      } else {
+        source = await fetchFile(url, budget, from);
+        if (source !== null) source = absolutizeCssUrls(source, url);
+        cache.set(url, source);
+      }
       if (source === null) return null;
-      source = absolutizeCssUrls(source, url);
       const { prefix, imports, body } = splitCssImports(source);
       let output = prefix;
       for (const imported of imports) {
         const child = depth > 0 && /^https?:/i.test(imported.url)
-          ? await inlineCss(imported.url, budget, depth - 1, active, from, fetchFile)
+          ? await inlineCss(imported.url, budget, depth - 1, active, from, fetchFile, cache)
           : null;
         output += (child === null ? imported.raw : wrapImportedCss(child, imported.tail)) + '\n';
       }

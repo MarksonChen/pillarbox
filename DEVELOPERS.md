@@ -172,9 +172,21 @@ the browser's host can reach (a router page, a metadata endpoint) and read the
 answer back out. Public pages may relay only HTTPS sheets (TLS is the DNS-
 rebinding boundary a hostname check cannot provide); a private target is
 allowed only from a private page on the same host, though ports may differ for
-localhost development. `sender.origin` is set by the browser, not the page.
-Redirects and non-`text/css` responses are rejected, and bodies are streamed
-under the shared byte budget rather than buffered before the limit. Opaque
+localhost development and the three loopback spellings (`localhost`,
+`127.0.0.0/8`, `::1`) count as that same host. Every hostname is canonicalized
+first — lowercased, IPv6 brackets stripped, the root label's trailing dot
+dropped — because `localhost.` is the same host to DNS but not to `===`, and
+recognising only one spelling is the whole guard undone. An asker that is not
+http(s) (a `file://` page, an opaque origin) is treated as public rather than
+refused: it reaches public HTTPS and nothing private. `sender.origin` is set
+by the browser, not the page. Redirects are **followed** and the response then
+re-validated — URL policy re-run against `res.url`, plus the `text/css` check —
+because the final response is what actually decides, and refusing redirects
+outright blacklists CDN version aliases and `http`->`https` upgrades for the
+page's whole life. Non-`text/css` responses are rejected (the relay hands a
+cross-origin body back to the page, so it is a CORS bypass for anything it
+will fetch), and bodies are streamed under the shared byte budget rather than
+buffered before the limit. Opaque
 sheets are fetched there, `@import` chains inlined
 (depth 3, active-path cycle- and byte-capped, repeated imports preserved at
 each cascade location, conditions rewritten as equivalent
@@ -192,7 +204,12 @@ invert the cascade between them. An `@import`'s own `layer()`/`supports()`
 conditions are wrapped around the clone's text (the media condition rides its
 `media` attribute) — dropping them would float the rules out of their cascade
 layer, where unlayered beats layered. A sheet already disabled by the page is
-never cloned. Otherwise the original is turned off via
+never cloned. A disabled sheet we *can* read still gets its media text
+shifted: it paints nothing, so editing it changes no pixel, the same
+ownership bookkeeping restores it, and enabling a sheet is a pure CSSOM
+change that fires no mutation record — leaving it unshifted would mean up to
+one rescan of desktop-width layout inside the squeeze on every theme toggle.
+Otherwise the original is turned off via
 `sheet.disabled` — the CSSOM flag, NOT `link.disabled`, whose attribute
 round-trip re-fetches the sheet asynchronously and leaves the page unstyled
 for a moment on restore — and only once the clone actually holds its text.
@@ -355,6 +372,18 @@ query edits, which live only in the CSSOM and carry no fingerprint a new
 world could find; inline styles and clone `<style data-pillarbox-mq>` nodes
 are additionally stripped by hand in case the old world never runs.
 
+Undoing a dead world's `sheet.disabled` needs to know *which element* it
+turned off, so the disable also tags that element with
+`data-pillarbox-mq-off`; cleanup re-enables exactly those. Matching on the
+clone's `href` instead would re-enable a same-URL sheet the page itself had
+disabled — two `<link>`s can share a URL while only one is the page's active
+theme. Clones also carry `data-pillarbox-mq-v`, and its *absence* is the
+signal that matters: a clone from a life before that tag existed recorded
+ownership only on itself and never said which element it shadowed, so those
+alone fall back to the old href match (first hit only). Without that
+fallback an extension update would leave the shadowed stylesheet dark for the
+rest of the page's life.
+
 ## Options page
 
 The options page loads the real content scripts itself (Chrome injects none
@@ -486,8 +515,9 @@ inline/nested/range/em breakpoints flip, orientation goes portrait, a
 cross-origin imports keep document order against a deliberately slow one, a
 layered import's clone stays inside its cascade layer, the
 cross-origin clone inlines its `@import`, preserves repeated imports,
-absolutizes `url()`s and keeps cascade order, disabled sheets stay inert,
-redirect/non-CSS relay responses are refused, top-level and nested
+absolutizes `url()`s and keeps cascade order, disabled sheets are never
+cloned, an allowed redirect is followed while the response it lands on is
+still validated, non-CSS relay responses are refused, top-level and nested
 insertRule-added rules get picked up, page-written mediaTexts are rebased,
 updates re-derive from originals, and toggle-off restores the latest page
 text verbatim), and the MAIN-world

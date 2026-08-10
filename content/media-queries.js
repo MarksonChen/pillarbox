@@ -49,6 +49,16 @@ SQZ.mediaQueries ??= (() => {
   // (extension reload) can find stale clones and re-enable their originals.
   const COPY_ATTR = 'data-pillarbox-mq';
   const DISABLED_ATTR = 'data-pillarbox-mq-disabled';
+  // Written on the element whose sheet we turned off, not on the clone, so a
+  // world that dies before restoring can be undone by element identity
+  // instead of by href — two <link>s can share a URL while the page has
+  // disabled exactly one of them for its own reasons.
+  const OFF_ATTR = 'data-pillarbox-mq-off';
+  // Stamped on every clone this build writes. Its ABSENCE is the signal that
+  // matters: a clone without it comes from a life that predates OFF_ATTR and
+  // always disabled whatever it shadowed, so index.js knows to fall back
+  // rather than leaving that sheet dark forever.
+  const CLONE_VERSION_ATTR = 'data-pillarbox-mq-v';
 
   let shift = null;          // left + right while running, else null
   let onApply = null;        // host callback: "match states may have moved"
@@ -108,12 +118,17 @@ SQZ.mediaQueries ??= (() => {
       edited.delete(ml);
       return false;
     }
-    if (current === next) {
-      entry.written = current;
-      return false;
-    }
+    // Steady state: the live value is exactly what our last assignment
+    // normalized to, and that assignment was this very text. Testing the
+    // generated text against `current` alone can never match — Chrome
+    // collapses `calc(700px + 600px)` to `calc(1300px)` on the way in — so
+    // the raw text assigned is remembered beside the normalized read-back.
+    // Without both halves this guard never fired and the 2s rescan rewrote
+    // every registered rule forever, each write forcing a style recalc.
+    if (current === entry.written && next === entry.applied) return false;
     try {
       ml.mediaText = next;
+      entry.applied = next;
       entry.written = ml.mediaText; // Chrome normalizes the assigned text
       return entry.written !== current;
     } catch {
@@ -129,7 +144,7 @@ SQZ.mediaQueries ??= (() => {
     let orig;
     try { orig = ml.mediaText; } catch { return false; }
     if (!orig || !RX_ANY.test(orig)) return false;
-    const entry = { orig, written: orig, sheet, top: topSheet(sheet) };
+    const entry = { orig, written: orig, applied: null, sheet, top: topSheet(sheet) };
     edited.set(ml, entry);
     return applyEdit(ml, entry, shift);
   }
@@ -169,10 +184,17 @@ SQZ.mediaQueries ??= (() => {
   }
 
   function walkSheet(sheet) {
-    // A disabled alternate/theme sheet remains in document.styleSheets. It
-    // must stay inert; cloning it would activate it and teardown would lose
-    // the page's original state.
-    try { if (sheet.disabled) return false; } catch { return false; }
+    // A disabled alternate/theme sheet remains in document.styleSheets. Its
+    // media text is still worth shifting: a disabled sheet paints nothing, so
+    // editing it changes no pixel, the same ownership bookkeeping restores
+    // it, and the moment the page enables the sheet it is already correct
+    // rather than a rescan behind. Enabling is a pure CSSOM change that fires
+    // no mutation record, so "a rescan behind" means up to two seconds of
+    // desktop-width layout inside the squeeze on every theme toggle.
+    // What must not happen is CLONING it — adoptOpaque activates its clone,
+    // and teardown would lose the page's own disabled state.
+    let disabled = false;
+    try { disabled = !!sheet.disabled; } catch { return false; }
     // Whole-sheet gating (<link media>/<style media>): sheet.media is
     // readable and settable even on opaque sheets, and editing it leaves
     // the DOM attribute alone (verified: the attribute keeps its value).
@@ -181,7 +203,7 @@ SQZ.mediaQueries ??= (() => {
     try { rules = sheet.cssRules; } catch {} // SecurityError: cross-origin
     if (rules) {
       changed = walkRules(rules, sheet) || changed;
-    } else {
+    } else if (!disabled) {
       adoptOpaque(sheet);
     }
     return changed;
@@ -267,6 +289,7 @@ SQZ.mediaQueries ??= (() => {
     // job the old null placeholder did.
     const el = document.createElement('style');
     el.setAttribute(COPY_ATTR, href);
+    el.setAttribute(CLONE_VERSION_ATTR, '2');
     if (cond.media) el.media = cond.media;
     anchor.before ? anchor.node.before(el) : anchor.node.after(el);
     // Ownership flips only after the text lands: turning the original off
@@ -330,6 +353,7 @@ SQZ.mediaQueries ??= (() => {
     }
     entry.disabledByUs = true;
     el.setAttribute(DISABLED_ATTR, '');
+    try { sheet.ownerNode?.setAttribute(OFF_ATTR, ''); } catch {}
     walkSheet(el.sheet);
     fireApply();
   }
@@ -340,8 +364,14 @@ SQZ.mediaQueries ??= (() => {
     // disabled during fetch carry no ownership flag.
     if (entry.disabledByUs) {
       try { sheet.disabled = false; } catch {}
+      try { sheet.ownerNode?.removeAttribute(OFF_ATTR); } catch {}
     }
-    copies.delete(sheet);
+    // By identity, not by key. A slow fetch can resolve after maintainCopies
+    // already dropped its clone and a later scan minted a replacement under
+    // the same sheet; deleting by key there evicts the LIVE entry, leaving a
+    // clone in the DOM that stop() can no longer find to remove or re-enable
+    // — and the next walk mints a third on top of it.
+    if (copies.get(sheet) === entry) copies.delete(sheet);
   }
 
   // --- change tracking ---------------------------------------------------

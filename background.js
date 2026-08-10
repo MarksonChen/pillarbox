@@ -89,9 +89,15 @@ async function fetchCssFile(url, budget, from) {
   if (!RELAY.relayable(url, from)) return null; // also covers @import targets
   let res;
   try {
+    // Redirects are followed, not refused: CDN version aliases, http->https
+    // upgrades and path canonicalisation all redirect, and refusing them
+    // blacklists the sheet for the page's whole life. What made refusing
+    // look necessary — a redirect walking the policy from a public URL to a
+    // private one — is closed by re-running relayable() on res.url below,
+    // which is the check that actually decides, on the URL actually fetched.
     res = await fetch(url, {
       credentials: 'omit',
-      redirect: 'error',
+      redirect: 'follow',
       signal: AbortSignal.timeout(CSS_FETCH_TIMEOUT),
     });
   } catch {
@@ -103,7 +109,11 @@ async function fetchCssFile(url, budget, from) {
     // content script then sees only a dead channel.
     chrome.runtime.getPlatformInfo().catch(() => {});
   }
-  if (!res.ok || res.redirected || !RELAY.relayable(res.url, from)) return null;
+  if (!res.ok || !RELAY.relayable(res.url, from)) return null;
+  // Strict on purpose, and not merely a parity check with what Chrome would
+  // apply: the relay hands a cross-origin body back to the page, so anything
+  // it will fetch is a CORS bypass for that resource. text/css keeps that to
+  // stylesheets. Parameters are dropped, so `text/css; charset=utf-8` passes.
   const mime = (res.headers.get('content-type') ?? '').split(';', 1)[0].trim().toLowerCase();
   if (mime !== 'text/css') return null;
   const declared = Number(res.headers.get('content-length'));
