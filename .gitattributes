@@ -1,0 +1,17 @@
+# Line endings are declared here rather than left to each clone's
+# core.autocrlf. Everything in the repo is already LF; without this file that
+# holds only by luck of the contributor's Git config, and a Windows clone with
+# autocrlf=false would commit CRLF into make_icons.sh — whose shebang then
+# reads as the interpreter "/bin/sh\r" and fails on macOS.
+* text=auto
+
+# Wherever it is checked out, a shell script needs LF: see above.
+*.sh text eol=lf
+
+# The PowerShell counterpart is Windows-only by definition, and 5.1 is the
+# edition least forgiving about LF-only source.
+*.ps1 text eol=crlf
+
+# Art is bytes; never let a filter near it.
+*.png binary
+*.gif binary
