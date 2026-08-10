@@ -49,8 +49,11 @@ SQZ.mediaQueries ??= (() => {
   let shift = null;          // left + right while running, else null
   let onApply = null;        // host callback: "match states may have moved"
   let epoch = 0;             // bumped by start/stop; stale async fetches bail
-  const edited = new Map();  // MediaList -> {orig, sheet}
-  const copies = new Map();  // original CSSStyleSheet -> {el, anchor} | null (fetch in flight)
+  const edited = new Map();  // MediaList -> {orig, sheet, top}; top = topSheet(sheet),
+                             // the sheet the rescan prune asks about reachability
+  const copies = new Map();  // original CSSStyleSheet -> {el, anchor, top, filled};
+                             // the entry lands before the fetch, and filled
+                             // flips once the clone actually holds the text
   let counts = new WeakMap();// CSSStyleSheet -> cssRules.length at last walk
   let failed = new Set();    // hrefs the worker could not fetch (this run)
   const textCache = new Map(); // href -> inlined text; survives stop() so a

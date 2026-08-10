@@ -1,6 +1,10 @@
 // Service worker: routes toolbar-icon clicks (and the _execute_action
 // keyboard shortcut) to the content script, injecting it first into tabs
 // that were already open when the extension was installed or reloaded.
+// It also owns the jobs a content script cannot do itself: the one-time
+// cleanup of pre-release storage, the LRU prune of page records, the
+// chrome.tabs zoom relay, and the private-network-guarded fetch of
+// cross-origin stylesheet text.
 importScripts('shared/defaults.js');
 
 // Pre-release builds stored one record per origin under 'site:'; the schema
@@ -24,8 +28,9 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 // Silent LRU cap: keep only the SQZ.MAX_PAGES most recently used page
-// records (`t` is stamped by the content script on every toggle/resize/
-// restore). Checked shortly after any new record appears.
+// records (`t` is stamped by the content script on every toggle, drag end
+// and reset, and on loading a page that already has a record — never on a
+// plain window resize). Checked shortly after any new record appears.
 let pruneTimer = null;
 
 async function prunePages() {

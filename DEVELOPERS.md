@@ -19,6 +19,7 @@ content/panels.js      shadow-DOM panels + drag handles
 content/index.js       per-page state machine, storage, lifecycle
 options/               options page
 tools/make_icons.sh    regenerate icons/ from tools/icon-source.png (macOS sips)
+tools/make_icons.ps1   the same, on Windows (System.Drawing)
 test/                  test pages (page, mq, csp, appshell, vwshell, quirks) + end-to-end script
 ```
 
@@ -123,9 +124,9 @@ every width feature in every
 reachable stylesheet is shifted by the panels' total width S: a breakpoint W
 becomes `calc(W + Spx)` — the same shift for min/max/plain width and both
 ends of range syntax, and calc() keeps em-unit breakpoints exact without
-knowing the browser's px-per-em. `orientation:` and colon-form
-`aspect-ratio:` cannot be shifted by a length, so they are substituted with
-a constant (`min-height: 0px` / `min-height: 999999px` — height-based so the
+knowing the browser's px-per-em. `orientation:` and `aspect-ratio` — colon
+form and MQ4 range form alike — cannot be shifted by a length, so they are
+substituted with a constant (`min-height: 0px` / `min-height: 999999px` — height-based so the
 width passes cannot re-match it) that holds for the effective viewport,
 recomputed on resize. Edits go through the CSSOM (`MediaList.mediaText`,
 whole-sheet `sheet.media` for `<link media>` gates — the DOM attribute is
@@ -235,9 +236,10 @@ whenever the page moved since the last look. Two hard-won constraints,
 both found on YouTube: the cadence must exceed fixed-bars' 300ms rescan
 debounce, which every poke re-arms through the isolated world's own resize
 listener (a faster stream postpones the very shell adoption it waits for),
-and the fingerprint must live on `<body>` scroll metrics — the root
-element's client/scroll widths are viewport-based and blind to content
-narrowing back inside the margins. Same-S re-announcements never poke:
+and the fingerprint's WIDTH must come from `<body>` — the root element's
+client/scroll widths are viewport-based and blind to content narrowing back
+inside the margins; the root's `scrollHeight` rides along beside the body's
+scroll metrics as the quickest signal that a relayout has actually landed. Same-S re-announcements never poke:
 they follow a real resize the page already heard. The hook is page-lifetime and survives extension
 reloads — the stale-artifact pass announces an explicit 0 in case the
 orphaned world never wakes to do it itself. The toolbar-click fallback
@@ -396,7 +398,7 @@ turns green/NARROW, print preview is clean (and un-triggers the breakpoint).
 
 ```sh
 python3 -m http.server 8080 --directory test
-open http://localhost:8080/page.html
+open http://localhost:8080/page.html     # Windows: start http://localhost:8080/page.html
 ```
 
 Automated (needs Node ≥ 22 and Chrome for Testing — branded Chrome ≥ 137
@@ -406,6 +408,12 @@ ignores `--load-extension`):
 npx @puppeteer/browsers install chrome@stable --path .cft   # once, ~150 MB
 node test/e2e.mjs
 ```
+
+Both commands are the same on macOS, Linux and Windows: `findChrome()` probes
+every Chrome-for-Testing platform layout under `.cft` and falls back to a
+locally installed **Chromium** (never branded Chrome, which would run the
+suite extensionless and fail everything for the wrong reason). Point it
+somewhere else with `--chrome <path>` or `CHROME_BIN`.
 
 Every assertion is reported, never thrown: a check whose condition IS a wait
 uses `checkFor()`, which polls until the condition holds and otherwise records
@@ -455,7 +463,8 @@ reads as build input rather than a shipped asset (nothing excludes it from a
 zip; leave it out when packaging). Regenerate the four sizes with:
 
 ```sh
-tools/make_icons.sh tools/icon-source.png
+tools/make_icons.sh tools/icon-source.png              # macOS (sips)
+powershell -ExecutionPolicy Bypass -File tools\make_icons.ps1 tools\icon-source.png   # Windows
 ```
 
 The card is what makes the icon legible on a dark toolbar as well as a light
@@ -471,4 +480,5 @@ warns that a non-square image may be distorted, so a wider-than-tall drawing
 has to be padded with transparent pixels — evenly, or the mark sits visibly
 off-centre. `sips` cannot pad with transparency (`--padColor` takes an opaque
 hex), so that step means compositing into a zero-filled RGBA buffer rather than
-a one-liner.
+a one-liner. Neither script pads — padding belongs to the master art; the
+PowerShell one at least warns when handed a non-square source.

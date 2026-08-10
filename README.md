@@ -16,13 +16,13 @@ A Chrome extension that squeezes a page's content left/right/inward using two re
 
 | To do this | Do that |
 | --- | --- |
-| Turn the sidebars on or off | Click the toolbar icon, or press your custom shortcut |
+| Turn the sidebars on or off | Click the toolbar icon, or press `Alt+Shift+S` (rebind it at `chrome://extensions/shortcuts`) |
 | Resize one side | Drag the sidebar edge |
-| Resize both sides at once     | Hold any modifier key (⇧ ⌃ ⌥ ⌘) and drag              |
+| Resize both sides at once | Hold any modifier key (Shift, Ctrl, Alt or ⌘) and drag |
 | Collapse one side | Double-click it |
 | Bring a collapsed side back | Drag from the page edge or double-click the edge |
+| Bring both collapsed sides back | Click the toolbar icon — with both sides collapsed it revives them at your default widths instead of toggling off |
 | Return to your default widths | Hold a modifier and double-click a sidebar |
-|  |  |
 
 
 

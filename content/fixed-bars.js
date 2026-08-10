@@ -401,7 +401,11 @@ SQZ.fixedBars ??= (() => {
       if (el.isConnected) assertOne(el, managed.get(el));
       else release(el);
     }
-    // Viewport resizes move the 90% threshold; rescan once things settle.
+    // Rescan once things settle: a viewport resize moves the 90% threshold.
+    // Also load-bearing for breakpoint shifts — a media flip restyles the
+    // page without touching any attribute the observer watches, so index.js
+    // nudges update() with unchanged widths on every shift application
+    // purely to schedule this rescan.
     clearTimeout(rescanTimer);
     rescanTimer = setTimeout(scanAll, 300);
   }

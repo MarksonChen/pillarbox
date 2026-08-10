@@ -46,8 +46,11 @@
   if (!XF || typeof window.matchMedia !== 'function'
     || !window.MediaQueryList || !window.MediaQueryListEvent) return;
 
-  // Marker carried by every accessor we install: the double-injection guard,
-  // and how a re-stamp tells our own getter from the native one. Deliberately
+  // Marker stamped on the accessors we later have to recognise: the list
+  // `matches` getter (the double-injection guard just below) and the width
+  // metrics (how a re-stamp tells our own getter from the native one). The
+  // MediaQueryListEvent `matches` getter goes in unstamped — nothing ever
+  // has to identify it again. Deliberately
   // not named after the extension — a page can always detect THAT matchMedia
   // was wrapped, but it should not learn by whom from a name we chose.
   const MARK = '__shimmed';

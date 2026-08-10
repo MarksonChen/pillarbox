@@ -52,8 +52,8 @@ if (!SQZ.booted) {
     ];
     for (const [target, type, fn] of domListeners) target.addEventListener(type, fn);
 
-    // The observers in squeeze.js / fixed-bars.js probe this before
-    // re-asserting styles. Without it, an orphaned script's watcher and a
+    // The observers in squeeze.js / fixed-bars.js / media-queries.js probe
+    // this before re-asserting styles. Without it, an orphaned script's watcher and a
     // freshly injected script's watcher would each "correct" the other's
     // html margins in an unbounded microtask chain the moment they disagree.
     SQZ.orphanGuard = () => {
@@ -337,7 +337,8 @@ if (!SQZ.booted) {
 
     // Default widths for THIS page: the first matching per-URL rule wins,
     // otherwise the global defaults. Consulted when a page has no saved
-    // widths yet, and by the double-click reset.
+    // widths yet, by the modifier + double-click reset, and by the toolbar
+    // click that revives a page whose sides are both collapsed.
     function defaultWidths() {
       return SQZ.matchRule(settings.rules, location.href)
         ?? { left: settings.defaultLeft, right: settings.defaultRight };
@@ -588,9 +589,11 @@ if (!SQZ.booted) {
     }
 
     function onReset() {
-      // Double-click on a panel's empty space: both sides back to this
-      // page's defaults (URL rule or global). persist() updates rec
-      // synchronously before writing.
+      // Modifier + double-click anywhere on a sidebar (the handle bubbles
+      // there too): both sides back to this page's defaults (URL rule or
+      // global). A plain double-click collapses or restores just that side
+      // and never reaches here. persist() updates rec synchronously before
+      // writing.
       persist({ on: true, ...defaultWidths() });
       applyWidthsToPage({ animate: true });
     }

@@ -30,7 +30,7 @@ function formState() {
 }
 
 // ---- per-URL default-width rules ----
-// Each row is one {pattern, left, right}. Rows live in the form, so edits
+// Each row is one {pattern, mode, autoShow, left, right}. Rows live in the form, so edits
 // ride the same save-on-change path as every other field. A row with an
 // empty pattern stays in the UI but is not saved; an invalid regex is saved
 // (nothing typed is ever thrown away) but flagged here and skipped by the
