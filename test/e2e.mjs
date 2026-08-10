@@ -14,7 +14,7 @@
 // via chrome://extensions -> Load unpacked.
 
 import { createServer } from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -32,6 +32,17 @@ if (typeof WebSocket === 'undefined') {
   process.exit(2);
 }
 
+// Chrome for Testing unpacks as <version>/<platform-dir>/<binary>, and the
+// binary's name and depth differ per platform — a map beats branching, and
+// probing every entry costs nothing next to guessing this host's own name.
+const CFT_BINARIES = {
+  'chrome-mac-arm64': 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+  'chrome-mac-x64': 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+  'chrome-linux64': 'chrome',
+  'chrome-win64': 'chrome.exe',
+  'chrome-win32': 'chrome.exe',
+};
+
 function findChrome() {
   const argIdx = process.argv.indexOf('--chrome');
   if (argIdx !== -1 && process.argv[argIdx + 1]) return process.argv[argIdx + 1];
@@ -40,20 +51,27 @@ function findChrome() {
   const cft = path.join(ROOT, '.cft', 'chrome');
   if (existsSync(cft)) {
     for (const ver of readdirSync(cft)) {
-      for (const plat of ['chrome-mac-arm64', 'chrome-mac-x64', 'chrome-linux64']) {
-        candidates.push(path.join(
-          cft, ver, plat,
-          plat.startsWith('chrome-mac')
-            ? 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'
-            : 'chrome',
-        ));
+      for (const [plat, bin] of Object.entries(CFT_BINARIES)) {
+        candidates.push(path.join(cft, ver, plat, bin));
       }
     }
   }
-  candidates.push('/Applications/Chromium.app/Contents/MacOS/Chromium');
+  // Chromium only. Branded Chrome is deliberately absent from this fallback
+  // on every platform: >= 137 ignores --load-extension, so finding one would
+  // run the whole suite against an extensionless browser and fail every
+  // assertion for a reason that looks nothing like the cause.
+  if (process.platform === 'win32') {
+    for (const base of [process.env.LOCALAPPDATA, process.env.ProgramFiles,
+      process.env['ProgramFiles(x86)']]) {
+      if (base) candidates.push(path.join(base, 'Chromium', 'Application', 'chrome.exe'));
+    }
+  } else {
+    candidates.push('/Applications/Chromium.app/Contents/MacOS/Chromium');
+  }
   for (const c of candidates) if (existsSync(c)) return c;
   console.error('No Chrome for Testing / Chromium found.\nInstall one with:\n'
-    + '  npx @puppeteer/browsers install chrome@stable --path .cft');
+    + '  npx @puppeteer/browsers install chrome@stable --path .cft\n'
+    + 'or point at an existing binary with --chrome <path> / CHROME_BIN.');
   process.exit(2);
 }
 
@@ -277,7 +295,18 @@ async function main() {
   ], { stdio: 'ignore' });
 
   const cleanup = () => {
-    try { chrome.kill('SIGKILL'); } catch {}
+    // Windows has no signal to a process group: kill() reaches the browser
+    // process alone and leaves its renderer/GPU/utility children running,
+    // holding the debug port and the profile against the next run. taskkill
+    // /T takes the tree. Synchronous on purpose — this also runs from the
+    // 'exit' handler, where nothing async would get a turn.
+    try {
+      if (process.platform === 'win32' && chrome.pid) {
+        spawnSync('taskkill', ['/pid', String(chrome.pid), '/T', '/F'], { stdio: 'ignore' });
+      } else {
+        chrome.kill('SIGKILL');
+      }
+    } catch {}
     server.close();
     server2.close();
   };
@@ -583,6 +612,28 @@ async function main() {
     await mouse('mousePressed', 320, 450, 2); await mouse('mouseReleased', 320, 450, 2);
     const collapsed = await waitFor(async () => (await evalIn(page, SNAP)).ml === '0px',
       3000, 'dblclick collapse');
+    // A collapsed side is reachable only by its handle, so the handle must lie
+    // wholly INSIDE the layout viewport — any overhang past that edge cannot be
+    // clicked. Invisible on macOS, where overlay scrollbars put the viewport
+    // edge at the window edge; on Windows the classic scrollbar moves it ~15px
+    // in and the overhang becomes a dead strip the gesture aims straight at.
+    await checkFor('collapsed handle lies wholly inside the layout viewport',
+      () => evalIn(page, `(() => {
+        const root = document.querySelector('pillarbox-host')?.shadowRoot;
+        if (!root) return null;
+        const h = root.querySelector('.panel.left .handle');
+        if (!h) return null;
+        const r = h.getBoundingClientRect();
+        // Layout width without trusting innerWidth, which the MAIN-world hook
+        // lies about while squeezed: the root's border box plus our margins.
+        const de = document.documentElement, cs = getComputedStyle(de);
+        const layoutW = de.getBoundingClientRect().width
+          + parseFloat(cs.marginLeft) + parseFloat(cs.marginRight);
+        return { left: Math.round(r.left), right: Math.round(r.right),
+          width: Math.round(r.width), layoutW: Math.round(layoutW) };
+      })()`),
+      (v) => v && v.left >= 0 && v.right <= v.layoutW && v.width >= 10,
+      3000, (v) => JSON.stringify(v));
     await mouse('mousePressed', 2, 450, 1); await mouse('mouseReleased', 2, 450, 1);
     await mouse('mousePressed', 2, 450, 2); await mouse('mouseReleased', 2, 450, 2);
     await checkFor('dblclick collapses and restores the left side',
@@ -1249,12 +1300,18 @@ async function main() {
         width: shell.width,
         innerLeft: inner.left,
         frameW: document.getElementById('frame').contentWindow.innerWidth,
+        cw: document.documentElement.clientWidth,
       };
     })()`;
     const shellPage = await openPage(`${BASE}/appshell.html`);
     await sleep(300);
     const shellBase = await evalIn(shellPage, SHELL_SNAP);
-    check('app shell baseline anchored to viewport', shellBase.left === 0 && near(shellBase.width, 1440),
+    // Spans the viewport, whatever the viewport turns out to be — NOT the
+    // 1440 of --window-size. That flag sizes the OUTER window, and on Windows
+    // the layout viewport comes out ~28px narrower; on macOS the two agree,
+    // which is the only reason a hardcoded 1440 ever held here.
+    check('app shell baseline anchored to viewport',
+      shellBase.left === 0 && near(shellBase.width, shellBase.cw),
       JSON.stringify(shellBase));
     const shellOn = await toggleViaWorker(`${BASE}/appshell.html`);
     check('app-shell page toggles on', shellOn && shellOn.on === true, JSON.stringify(shellOn));
@@ -1403,10 +1460,14 @@ async function main() {
         && v.ori === 'rgb(10, 10, 10)' && v.whole === 'rgb(0, 0, 0)'
         && v.imp === 'rgb(0, 0, 0)' && v.clones === 0,
       5000);
-    check('mq baseline: page-held matchMedia lists native, no events, no resize pokes',
-      mq.mm?.q === true && mq.mm?.count === 0 && mq.mm?.rz === 0
+    check('mq baseline: page-held matchMedia lists native, no listener events',
+      mq.mm?.q === true && mq.mm?.count === 0
         && mq.mm?.dark === '(prefers-color-scheme: dark)',
       JSON.stringify(mq.mm));
+    // The browser fires its own resize events while a page settles — none on
+    // macOS, exactly one on Windows — so an absolute count says nothing about
+    // whether WE poked. Bank the baseline and assert the delta below.
+    const MQRZ = mq.mm?.rz ?? 0;
     // Native width metrics before any squeeze, for the lie deltas below.
     const MQIW = mq.iw;
     const MQCW = mq.cwLied;
@@ -1443,7 +1504,7 @@ async function main() {
         && mq.mm?.last && mq.mm.last[1] === false && mq.mm.last[2] === false,
       JSON.stringify(mq.mm));
     check('shift change pokes a synthetic window resize (JS-measured layouts recompute)',
-      mq.mm?.rz >= 1, `rz=${mq.mm?.rz}`);
+      mq.mm?.rz > MQRZ, `rz=${mq.mm?.rz}, was ${MQRZ} before the squeeze`);
     check('page-world width metrics lie by the shift (innerWidth and root clientWidth)',
       mq.iw === MQIW - 600 && mq.cwLied === MQCW - 600,
       JSON.stringify({ iw: mq.iw, cw: mq.cwLied, baseIw: MQIW, baseCw: MQCW }));
@@ -1561,7 +1622,8 @@ async function main() {
     // every shift change the hook re-checks a geometry fingerprint and pokes
     // again whenever the page moved since its last look — which is what a
     // site that relayouts from a late, low-priority job (YouTube's player)
-    // needs. A regression back to a single poke still satisfies rz >= 1.
+    // needs. A regression back to a single poke would still satisfy the
+    // rz > MQRZ delta asserted above.
     const rzBefore = (await mqSnap()).mm.rz;
     await evalIn(mqPage, `(document.body.append(Object.assign(
       document.createElement('div'),

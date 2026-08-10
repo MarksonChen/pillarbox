@@ -58,9 +58,19 @@ SQZ.panels ??= (() => {
   user-select: none;
   -webkit-user-select: none;
 }
-/* Straddle the inner edge so the handle stays grabbable at width 0. */
-.panel.left .handle { right: -5px; }
-.panel.right .handle { left: -5px; }
+/* Straddle the inner edge so the handle stays grabbable at width 0 — but
+   never past the panel's OUTER edge, or the overhang lands outside the layout
+   viewport and is unclickable. That overhang costs nothing on macOS, where
+   overlay scrollbars put the viewport edge at the window edge and a pointer
+   thrown at the edge still lands on the inner half. Windows paints a classic
+   ~15px scrollbar the page can never receive events over, so the viewport
+   edge sits 15px inside the window: a straddling handle spent half its width
+   under that scrollbar and left a 5px target 15px in from where the gesture
+   aims. Clamping the offset to (width - 10px) keeps the full 10px live and
+   flush against the last reachable column. Inert while a side is wider than
+   the handle, so an open panel's handle still straddles its edge as before. */
+.panel.left .handle { right: min(-5px, calc(var(--pb-w, 999px) - 10px)); }
+.panel.right .handle { left: min(-5px, calc(var(--pb-w, 999px) - 10px)); }
 .handle::after {
   content: "";
   position: absolute;
@@ -181,6 +191,10 @@ SQZ.panels ??= (() => {
     if (!els) return;
     for (const side of ['left', 'right']) {
       els[side].panel.style.width = widths[side] + 'px';
+      // Same number as a custom property: the handle's offset clamp needs it
+      // in CSS, and reading it back from style.width in a calc() is not a
+      // thing the cascade can do.
+      els[side].panel.style.setProperty('--pb-w', widths[side] + 'px');
       // Report the stored (zoom-1) px, so the number matches the default
       // widths in the options page at any zoom level.
       els[side].readout.textContent = SQZ.cssToStored(widths[side], zoom) + ' px';
