@@ -1,13 +1,14 @@
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/MarksonChen/pillarbox" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="Zero dependencies">
+</p>
+
 <h1 align="center">Pillarbox</h1>
 
 <p align="center">A Chrome extension that squeezes a page's content left/right/inward using two resizable sidebars.</p>
 
 <img src="assets/left_right_inward.gif" alt="Dragging, centering, collapsing, and restoring the Pillarbox sidebars" width="1000">
 
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/MarksonChen/pillarbox" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="Zero dependencies">
-</p>
 
 ## Gestures
 
