@@ -459,8 +459,28 @@ async function loadShortcut() {
   }
 }
 
+// Every Chromium fork hosts the shortcuts UI at the same path, but under its
+// own internal scheme, and nothing in the extension API reports what that
+// scheme is. The UA-CH brand list is the only handle an extension page has on
+// which fork it is running in, so the two that matter are named here and
+// everything else falls through to `chrome://`. That fallback is not a guess
+// at a default: Brave, Vivaldi and Thorium all keep `chrome://` working as an
+// alias for their own scheme, so it is the correct answer there, not merely
+// the least-bad one. Edge and Opera are the forks that genuinely refuse it —
+// and both announce themselves in `brands`. A fork that neither aliases
+// `chrome://` nor brands itself would land on a dead tab, which is why this
+// stays a lookup of known-bad cases rather than an attempt to detect the
+// scheme in general: there is nothing to detect it with.
+function shortcutsUrl() {
+  for (const { brand } of navigator.userAgentData?.brands ?? []) {
+    if (brand.includes('Microsoft Edge')) return 'edge://extensions/shortcuts';
+    if (brand.includes('Opera')) return 'opera://extensions/shortcuts';
+  }
+  return 'chrome://extensions/shortcuts';
+}
+
 $('#openShortcuts').addEventListener('click', () => {
-  chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+  chrome.tabs.create({ url: shortcutsUrl() });
 });
 
 $('#openIssue').addEventListener('click', () => {
