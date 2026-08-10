@@ -15,7 +15,7 @@
 
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,8 +65,10 @@ function findChrome() {
       process.env['ProgramFiles(x86)']]) {
       if (base) candidates.push(path.join(base, 'Chromium', 'Application', 'chrome.exe'));
     }
-  } else {
+  } else if (process.platform === 'darwin') {
     candidates.push('/Applications/Chromium.app/Contents/MacOS/Chromium');
+  } else {
+    candidates.push('/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium');
   }
   for (const c of candidates) if (existsSync(c)) return c;
   console.error('No Chrome for Testing / Chromium found.\nInstall one with:\n'
@@ -194,7 +196,7 @@ async function waitFor(fn, timeoutMs, label) {
   try {
     await until(fn, timeoutMs, label);
     return true;
-  } catch (e) {
+  } catch {
     console.log(`NOTE  gave up waiting for ${label} — later checks may fail as a result`);
     return false;
   }
@@ -258,6 +260,27 @@ async function main() {
     } else if (u === '/layered.css') {
       res.setHeader('content-type', 'text/css');
       res.end('#lay { color: rgb(130, 130, 130); }\n');
+    } else if (u === '/disabled.css') {
+      res.setHeader('content-type', 'text/css');
+      res.end('#disabledProbe { color: rgb(210, 20, 20); }\n');
+    } else if (u === '/repeat-root.css') {
+      res.setHeader('content-type', 'text/css');
+      res.end('@import url("repeat-child.css") layer(first);\n'
+        + '@import url("repeat-child.css") layer(second);\n');
+    } else if (u === '/repeat-child.css') {
+      res.setHeader('content-type', 'text/css');
+      res.end('#repeatProbe { color: rgb(1, 2, 3); }\n');
+    } else if (u === '/redirect.css') {
+      res.writeHead(302, { location: `http://127.0.0.1:${PORT2}/mq-import.css` });
+      res.end();
+    } else if (u === '/redirect-to-noncss.css') {
+      // Lands on a body the relay must refuse: proves the response is still
+      // fully validated AFTER the redirect is followed, not just before.
+      res.writeHead(302, { location: `http://127.0.0.1:${PORT2}/not-css` });
+      res.end();
+    } else if (u === '/not-css') {
+      res.setHeader('content-type', 'text/plain');
+      res.end('not a stylesheet');
     } else {
       res.statusCode = 404;
       res.end('not found');
@@ -294,7 +317,11 @@ async function main() {
     'about:blank',
   ], { stdio: 'ignore' });
 
-  const cleanup = () => {
+  let stopped = false;
+  let profileRemoved = false;
+  const stopProcesses = () => {
+    if (stopped) return;
+    stopped = true;
     // Windows has no signal to a process group: kill() reaches the browser
     // process alone and leaves its renderer/GPU/utility children running,
     // holding the debug port and the profile against the next run. taskkill
@@ -310,7 +337,35 @@ async function main() {
     server.close();
     server2.close();
   };
-  process.on('exit', cleanup);
+  const removeProfile = () => {
+    if (profileRemoved) return;
+    try {
+      rmSync(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      profileRemoved = true;
+    } catch {}
+  };
+  const exitCleanup = () => {
+    stopProcesses();
+    removeProfile();
+  };
+  const cleanup = async () => {
+    const exited = chrome.exitCode !== null || chrome.signalCode !== null
+      ? Promise.resolve()
+      : new Promise((resolve) => {
+        let timer;
+        const done = () => {
+          clearTimeout(timer);
+          chrome.off('exit', done);
+          resolve();
+        };
+        chrome.once('exit', done);
+        timer = setTimeout(done, 5000);
+      });
+    stopProcesses();
+    await exited;
+    removeProfile();
+  };
+  process.on('exit', exitCleanup);
 
   try {
     // Browser endpoint.
@@ -549,6 +604,34 @@ async function main() {
       }
     };
     await screenshot(page, 'squeeze-on.png');
+
+    const containingBlockCases = [
+      ['translate longhand', 'translate', '0px'],
+      ['rotate longhand', 'rotate', '0deg'],
+      ['scale longhand', 'scale', '1'],
+      ['backdrop-filter', 'backdropFilter', 'blur(0px)'],
+      ['content-visibility', 'contentVisibility', 'auto'],
+      ['preserve-3d', 'transformStyle', 'preserve-3d'],
+      ['container-type', 'containerType', 'inline-size'],
+    ];
+    const navbarOwnership = () => evalIn(page, `(() => {
+      const el = document.getElementById('navbar');
+      return {
+        marker: el.style.getPropertyValue('--pillarbox'),
+        left: el.style.left,
+      };
+    })()`);
+    for (const [label, property, value] of containingBlockCases) {
+      await evalIn(page,
+        `document.body.style[${JSON.stringify(property)}] = ${JSON.stringify(value)}; true`);
+      await checkFor(`fixed bar released under ${label} containing block`,
+        navbarOwnership, (v) => v.marker === '' && v.left === '', 4000,
+        (v) => JSON.stringify(v));
+      await evalIn(page, `document.body.style[${JSON.stringify(property)}] = ''; true`);
+      await checkFor(`fixed bar re-adopted after ${label} is removed`,
+        navbarOwnership, (v) => v.marker === '1', 4000,
+        (v) => JSON.stringify(v));
+    }
 
     // Anchor loss, fixed edition. transform/filter/will-change/contain make
     // an ancestor the containing block for FIXED descendants too, not just
@@ -1395,6 +1478,19 @@ async function main() {
       (st) => st.settings?.rules?.length === 1,
       3000, (st) => JSON.stringify(st.settings?.rules ?? null));
 
+    const saveFailure = await evalIn(opts, `(async () => {
+      document.getElementById('defaultLeft').value = '444';
+      await saveSettings(async () => { throw new Error('FORCED WRITE FAILURE'); });
+      const box = document.getElementById('rulesQuota');
+      return { hidden: box.hidden, text: box.textContent,
+        restored: document.getElementById('defaultLeft').value };
+    })()`);
+    check('options: storage failure remains visible after the form resyncs',
+      saveFailure.hidden === false && saveFailure.text.includes('FORCED WRITE FAILURE')
+        && saveFailure.restored !== '444',
+      JSON.stringify(saveFailure));
+    await evalIn(opts, `(showSaveError(null), true)`);
+
     // Feedback card: the button opens the issue tracker in a new tab.
     await evalIn(opts, `(document.getElementById('openIssue').click(), true)`);
     await checkFor('options: feedback button opens the issue tracker',
@@ -1569,6 +1665,7 @@ async function main() {
     const MQ_SNAP = `(() => {
       const c = (id) => getComputedStyle(document.getElementById(id)).color;
       const link = document.getElementById('crossLink');
+      const disabledLink = document.getElementById('disabledLink');
       const main = document.getElementById('mainCss').sheet;
       let firstMedia = null;
       for (const r of main.cssRules) {
@@ -1578,13 +1675,15 @@ async function main() {
         ml: getComputedStyle(document.documentElement).marginLeft,
         ih: innerHeight,
         brk: c('brk'), desk: c('desk'), nest: c('nest'), em: c('em'),
-        ori: c('ori'), late: c('late'), whole: c('whole'),
+        ori: c('ori'), late: c('late'), nestedLate: c('nestedLate'), whole: c('whole'),
         x: c('x'), imp: c('imp'), xover: c('xover'),
         bg: getComputedStyle(document.getElementById('bgprobe')).backgroundImage,
         ord: c('ord'), lay: c('lay'),
         wholeAttr: document.getElementById('wholeLink').getAttribute('media'),
         clones: document.querySelectorAll('style[data-pillarbox-mq]').length,
         crossDisabled: !!(link.sheet && link.sheet.disabled),
+        disabledSheet: !!(disabledLink.sheet && disabledLink.sheet.disabled),
+        disabledProbe: c('disabledProbe'),
         firstMedia,
         // Page-world width metrics: the MAIN-world hook shifts these while
         // squeezed (innerWidth and the documentElement clientWidth, equally).
@@ -1617,7 +1716,8 @@ async function main() {
         && v.brk === 'rgb(10, 10, 10)' && v.desk === 'rgb(30, 30, 30)'
         && v.nest === 'rgb(10, 10, 10)' && v.em === 'rgb(10, 10, 10)'
         && v.ori === 'rgb(10, 10, 10)' && v.whole === 'rgb(0, 0, 0)'
-        && v.imp === 'rgb(0, 0, 0)' && v.clones === 0,
+        && v.imp === 'rgb(0, 0, 0)' && v.clones === 0
+        && v.disabledSheet && v.disabledProbe === 'rgb(0, 0, 0)',
       5000);
     check('mq baseline: page-held matchMedia lists native, no listener events',
       mq.mm?.q === true && mq.mm?.count === 0
@@ -1687,6 +1787,9 @@ async function main() {
     check('cross-origin sheet cloned (worker fetch, @import inlined, original disabled)',
       mq.imp === 'rgb(70, 70, 70)' && mq.clones === 4 && mq.crossDisabled,
       JSON.stringify({ imp: mq.imp, clones: mq.clones, disabled: mq.crossDisabled }));
+    check('disabled cross-origin stylesheet stays disabled and is not cloned',
+      mq.disabledSheet && mq.disabledProbe === 'rgb(0, 0, 0)',
+      JSON.stringify({ disabled: mq.disabledSheet, color: mq.disabledProbe }));
     // Two cross-origin imports of one readable sheet share an anchor, and the
     // first is served 500ms slower. Clones placed when their bytes land would
     // sit in completion order and invert the cascade between them.
@@ -1701,6 +1804,46 @@ async function main() {
       mq.xover === 'rgb(200, 100, 0)', mq.xover);
     check('clone url()s absolutized against the sheet origin',
       String(mq.bg).includes(':8124/px.gif'), mq.bg);
+
+    // Ask through a real isolated content-script execution so the worker sees
+    // an authentic sender.tab/origin. Repeated imports must occupy both cascade
+    // locations; redirects and non-CSS bodies must never cross the relay.
+    const relay = await evalIn(sw, `(async () => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((t) => (t.url || '').startsWith(${JSON.stringify(MQ_URL)}));
+      const ask = async (url) => {
+        const [{ result }] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (target) => chrome.runtime.sendMessage({ type: 'SQZ_FETCH_CSS', url: target }),
+          args: [url],
+        });
+        return result;
+      };
+      return {
+        repeat: await ask('http://127.0.0.1:${PORT2}/repeat-root.css'),
+        redirect: await ask('http://127.0.0.1:${PORT2}/redirect.css'),
+        redirectOff: await ask('http://127.0.0.1:${PORT2}/redirect-to-noncss.css'),
+        mime: await ask('http://127.0.0.1:${PORT2}/not-css'),
+      };
+    })()`);
+    const repeated = relay.repeat?.text?.match(/#repeatProbe/g) ?? [];
+    check('relay emits a repeated import at every cascade location',
+      relay.repeat?.ok && repeated.length === 2
+        && relay.repeat.text.includes('@layer first')
+        && relay.repeat.text.includes('@layer second'),
+      JSON.stringify({ ok: relay.repeat?.ok, occurrences: repeated.length }));
+    // Redirects are followed, not refused — CDN version aliases and
+    // http->https upgrades all redirect, and refusing them blacklists the
+    // sheet for the page's life. Safety comes from re-running the URL policy
+    // and the MIME check on the response that actually arrived, so a redirect
+    // that lands somewhere the relay would not have fetched is still refused.
+    check('relay follows a redirect to an allowed stylesheet',
+      relay.redirect?.ok === true && String(relay.redirect.text).includes('#imp'),
+      JSON.stringify(relay.redirect));
+    check('relay still validates the response a redirect lands on',
+      relay.redirectOff?.ok === false, JSON.stringify(relay.redirectOff));
+    check('relay rejects non-CSS response bodies',
+      relay.mime?.ok === false, JSON.stringify(relay.mime));
 
     // shiftText unit battery, in the content-script world.
     const B = await evalIn(sw, `(async () => {
@@ -1757,6 +1900,33 @@ async function main() {
       mqSnap, (v) => v.late === 'rgb(90, 90, 90)', 8000,
       (v) => `#late is ${v.late}, expected rgb(90, 90, 90)`);
 
+    // A nested insertion leaves the top-level sheet length unchanged, so a
+    // shallow count poll cannot see it.
+    await evalIn(mqPage, `(() => {
+      const sheet = document.getElementById('mainCss').sheet;
+      const group = [...sheet.cssRules].find((rule) => rule instanceof CSSSupportsRule);
+      group.insertRule('@media (max-width: 1000px) { #nestedLate { color: rgb(95, 95, 95) } }',
+        group.cssRules.length);
+      return true;
+    })()`);
+    await checkFor('a nested insertRule at unchanged top-level count is shifted',
+      mqSnap, (v) => v.nestedLate === 'rgb(95, 95, 95)', 8000,
+      (v) => `#nestedLate is ${v.nestedLate}, expected rgb(95, 95, 95)`);
+
+    // Reassign a MediaList while squeezed. The shifter must treat the page's
+    // new 500px query as authoritative, shift it by the current 800px now,
+    // and restore 500px—not the load-time 1000px—when stopped.
+    await evalIn(mqPage, `(() => {
+      const sheet = document.getElementById('mainCss').sheet;
+      const rule = [...sheet.cssRules].find((item) => item instanceof CSSMediaRule);
+      rule.media.mediaText = '(max-width: 500px)';
+      return true;
+    })()`);
+    await checkFor('page-authored mediaText change is rebased while squeezed',
+      mqSnap,
+      (v) => v.firstMedia.includes('1300px') && v.brk === 'rgb(10, 10, 10)',
+      8000, (v) => JSON.stringify({ media: v.firstMedia, brk: v.brk }));
+
     // Width changes re-derive every shift from the saved original text —
     // a double shift would leave brk stuck on.
     await evalIn(sw, `chrome.storage.local.set({ ${JSON.stringify(MQ_KEY)}:`
@@ -1764,7 +1934,8 @@ async function main() {
     mq = await checkFor(
       'width changes re-shift from originals (desktop rule back, clone follows, orientation back)',
       mqSnap,
-      (v) => v.ml === '50px' && v.brk === 'rgb(10, 10, 10)' && v.x === 'rgb(10, 10, 10)'
+      (v) => v.ml === '50px' && v.firstMedia.includes('600px')
+        && v.brk === 'rgb(10, 10, 10)' && v.x === 'rgb(10, 10, 10)'
         && v.desk === 'rgb(30, 30, 30)' && v.ori === 'rgb(10, 10, 10)'
         && v.imp === 'rgb(0, 0, 0)' && v.late === 'rgb(10, 10, 10)',
       8000);
@@ -1773,9 +1944,11 @@ async function main() {
       JSON.stringify(mq.mm));
     await evalIn(sw, `chrome.storage.local.set({ ${JSON.stringify(MQ_KEY)}:`
       + ' { on: true, left: 300, right: 300, t: Date.now() } })');
-    await checkFor('breakpoints follow width changes both ways',
-      mqSnap, (v) => v.brk === 'rgb(20, 20, 20)', 8000,
-      (v) => `#brk is ${v.brk}, expected rgb(20, 20, 20)`);
+    await checkFor('breakpoints follow width changes both ways without losing the page edit',
+      mqSnap,
+      (v) => v.nest === 'rgb(40, 40, 40)' && v.firstMedia.includes('1100px')
+        && v.brk === 'rgb(10, 10, 10)',
+      8000, (v) => JSON.stringify({ nest: v.nest, media: v.firstMedia, brk: v.brk }));
 
     // The poke stream does not stop at the first event. For a window after
     // every shift change the hook re-checks a geometry fingerprint and pokes
@@ -1800,8 +1973,9 @@ async function main() {
     });
     mq = await checkFor('jsBreakpoints off un-lies matchMedia live; CSS shift untouched',
       mqSnap,
-      (v) => v.mm.q === true && v.mm.fresh === true && v.brk === 'rgb(20, 20, 20)',
-      8000, (v) => JSON.stringify({ mm: v.mm?.q, brk: v.brk }));
+      (v) => v.mm.q === true && v.mm.fresh === true
+        && v.nest === 'rgb(40, 40, 40)' && v.brk === 'rgb(10, 10, 10)',
+      8000, (v) => JSON.stringify({ mm: v.mm?.q, nest: v.nest, brk: v.brk }));
     check('jsBreakpoints off un-lies the width metrics too',
       mq.iw === MQIW && mq.cwLied === MQCW,
       JSON.stringify({ iw: mq.iw, cw: mq.cwLied }));
@@ -1815,7 +1989,8 @@ async function main() {
       'toggle off: mediaTexts restored verbatim, clones gone, original sheet re-enabled',
       mqSnap,
       (v) => v.ml === '0px' && v.brk === 'rgb(10, 10, 10)' && v.x === 'rgb(10, 10, 10)'
-        && v.firstMedia === '(max-width: 1000px)' && v.clones === 0 && !v.crossDisabled
+        && v.firstMedia === '(max-width: 500px)' && v.clones === 0 && !v.crossDisabled
+        && v.disabledSheet && v.disabledProbe === 'rgb(0, 0, 0)'
         && v.desk === 'rgb(30, 30, 30)' && v.imp === 'rgb(0, 0, 0)',
       8000);
     check('toggle off: matchMedia fully native again (page-held and fresh lists)',
@@ -1972,7 +2147,7 @@ async function main() {
     check('orphan logs no "Extension context invalidated" errors',
       orphExceptions.length === 0, orphExceptions.join(' | '));
   } finally {
-    cleanup();
+    await cleanup();
   }
 
   const failed = results.filter((r) => !r.ok);

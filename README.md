@@ -2,7 +2,9 @@
 
 A Chrome extension that squeezes a page's content left/right/inward using two resizable sidebars.
 
-(Video)
+[![Pillarbox squeezing a wide page into a centered reading column](assets/thumbnail.png)](assets/animation.gif)
+
+_Click the preview to open the full animation._
 
 ## Install From Source
 
@@ -12,7 +14,7 @@ A Chrome extension that squeezes a page's content left/right/inward using two re
 
 ## Gestures
 
-(Video)
+![Dragging, centering, collapsing, and restoring the Pillarbox sidebars](assets/animation.gif)
 
 | To do this | Do that |
 | --- | --- |
@@ -23,10 +25,6 @@ A Chrome extension that squeezes a page's content left/right/inward using two re
 | Bring a collapsed side back | Drag from the page edge or double-click the edge |
 | Bring both collapsed sides back | Click the toolbar icon — with both sides collapsed it revives them at your default widths instead of toggling off |
 | Return to your default widths | Hold a modifier and double-click a sidebar |
-
-
-
-
 
 ## What it remembers
 
@@ -78,6 +76,9 @@ off — or delete the rule — if you would rather nothing opened by itself.
   than the window) may still ignore the squeeze.
 - Small fixed elements — chat buttons, side drawers — are left where they are
   and may sit partly under a sidebar.
+- On public pages, cross-origin stylesheets served over plain HTTP keep their
+  native breakpoints; HTTPS is required before Pillarbox will relay and shift
+  an otherwise unreadable stylesheet.
 - Fullscreen video is unaffected, and printing temporarily un-squeezes the page
   so printouts come out clean.
 - Running on `file://` pages needs "Allow access to file URLs" in

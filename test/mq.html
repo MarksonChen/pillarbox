@@ -10,6 +10,10 @@
      the extension must fetch this through the worker and replay it in a
      <style> clone. Port must match PORT2 in e2e.mjs. -->
 <link id="crossLink" rel="stylesheet" href="http://127.0.0.1:8124/cross.css">
+<!-- Loaded, then disabled through CSSOM: it remains in document.styleSheets
+     but Pillarbox must neither clone/activate it nor re-enable it on stop. -->
+<link id="disabledLink" rel="stylesheet" href="http://127.0.0.1:8124/disabled.css"
+      onload="this.sheet.disabled = true">
 <style id="mainCss">
   /* No body color: #whole and #imp assert the un-styled rgb(0,0,0). */
   body { margin: 0; font: 15px/1.6 system-ui, sans-serif; }
@@ -34,6 +38,8 @@
   /* Target for a rule added later via insertRule (no DOM mutation): only
      the rescan interval can find it. */
   #late { color: rgb(10, 10, 10); }
+  #nestedLate { color: rgb(10, 10, 10); }
+  @supports (display: block) { #nestedLate { text-decoration: none; } }
 </style>
 <!-- Later same-origin sheet: must keep beating the cross-origin clone
      (cascade order), exactly as it beats the original. -->
@@ -79,6 +85,7 @@
   <div id="em">em — em-unit breakpoint</div>
   <div id="ori">ori — orientation: portrait</div>
   <div id="late">late — insertRule target</div>
+  <div id="nestedLate">nestedLate — nested insertRule target</div>
   <div id="whole">whole — whole-sheet link media gate</div>
   <div id="x">x — cross-origin breakpoint</div>
   <div id="imp">imp — @import inside the cross-origin sheet</div>
@@ -86,5 +93,6 @@
   <div id="bgprobe">bgprobe — relative url() in the cross-origin sheet</div>
   <div id="ord">ord — two cross-origin imports, later one must win</div>
   <div id="lay">lay — layered cross-origin import must stay inside its layer</div>
+  <div id="disabledProbe">disabledProbe — disabled cross-origin sheet stays inert</div>
 </body>
 </html>

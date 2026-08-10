@@ -16,7 +16,10 @@
 // Edits are CSSOM-only (mediaText, StyleSheet.disabled), which page CSP
 // cannot block and DOM observers cannot see. Chrome normalizes what we
 // write (`calc(700px + 300px)` reads back as `calc(1000px)`), so originals
-// are kept in a registry and every re-shift starts from the saved text.
+// are kept in a registry and every re-shift starts from the saved text. The
+// registry also remembers the normalized value we last wrote: if the page
+// changes mediaText while squeezed, that new text becomes the next original
+// instead of being overwritten by our stale snapshot.
 //
 // Cross-origin sheets guard cssRules with a SecurityError, and a content
 // script cannot fetch them either (page CORS applies) — the worker can
@@ -26,10 +29,10 @@
 // original sheet is turned off via sheet.disabled — the CSSOM flag, NOT
 // link.disabled, whose attribute round-trip re-fetches the sheet
 // asynchronously and would leave the page unstyled for a frame on restore.
-// One consequence is inherent and documented as a limitation: while a clone
-// stands in, our disable is indistinguishable from the page's own, so a
-// script that turns that sheet off through the CSSOM sees nothing change
-// (the clone keeps styling) and reads the flag back already true.
+// Sheets that are already disabled are never cloned. One consequence remains
+// inherent while a live clone stands in: our disable is indistinguishable
+// from the page's own, so a script that turns that sheet off through the
+// CSSOM sees nothing change (the clone keeps styling).
 //
 // Stylesheets are only half of it: sites also ask window.matchMedia from
 // JavaScript (YouTube's layout does). The MAIN-world hook in match-media.js
@@ -39,22 +42,31 @@ var SQZ = globalThis.SQZ ??= {};
 
 // ??= so re-injection can't replace a live instance (see squeeze.js).
 SQZ.mediaQueries ??= (() => {
-  const RESCAN_MS = 2000;    // page-driven insertRule (styled-components) has
-                             // no mutation event; a cheap length poll must do
+  const RESCAN_MS = 2000;    // page-driven CSSOM edits have no mutation event;
+                             // a periodic rule walk is the only general signal
   const COALESCE_MS = 150;   // trailing debounce for drag-driven updates
   // Marker attribute on every clone, so a later life of this content script
   // (extension reload) can find stale clones and re-enable their originals.
   const COPY_ATTR = 'data-pillarbox-mq';
+  const DISABLED_ATTR = 'data-pillarbox-mq-disabled';
+  // Written on the element whose sheet we turned off, not on the clone, so a
+  // world that dies before restoring can be undone by element identity
+  // instead of by href — two <link>s can share a URL while the page has
+  // disabled exactly one of them for its own reasons.
+  const OFF_ATTR = 'data-pillarbox-mq-off';
+  // Stamped on every clone this build writes. Its ABSENCE is the signal that
+  // matters: a clone without it comes from a life that predates OFF_ATTR and
+  // always disabled whatever it shadowed, so index.js knows to fall back
+  // rather than leaving that sheet dark forever.
+  const CLONE_VERSION_ATTR = 'data-pillarbox-mq-v';
 
   let shift = null;          // left + right while running, else null
   let onApply = null;        // host callback: "match states may have moved"
   let epoch = 0;             // bumped by start/stop; stale async fetches bail
-  const edited = new Map();  // MediaList -> {orig, sheet, top}; top = topSheet(sheet),
+  const edited = new Map();  // MediaList -> {orig, written, sheet, top}; top is
                              // the sheet the rescan prune asks about reachability
-  const copies = new Map();  // original CSSStyleSheet -> {el, anchor, top, filled};
-                             // the entry lands before the fetch, and filled
-                             // flips once the clone actually holds the text
-  let counts = new WeakMap();// CSSStyleSheet -> cssRules.length at last walk
+  const copies = new Map();  // original sheet -> clone ownership/state; the
+                             // entry lands synchronously before its fetch
   let failed = new Set();    // hrefs the worker could not fetch (this run)
   const textCache = new Map(); // href -> inlined text; survives stop() so a
                              // print cycle or toggle doesn't refetch anything
@@ -88,21 +100,62 @@ SQZ.mediaQueries ??= (() => {
     return s;
   }
 
+  function applyEdit(ml, entry, amount) {
+    let current;
+    try { current = ml.mediaText; } catch {
+      edited.delete(ml);
+      return false;
+    }
+    // Anything other than our exact last normalized write belongs to the
+    // page. Rebase immediately so a later drag or stop cannot erase it.
+    if (current !== entry.written) entry.orig = current;
+    if (!entry.orig || !RX_ANY.test(entry.orig)) {
+      edited.delete(ml);
+      return false;
+    }
+    const next = shiftText(entry.orig, amount);
+    if (next === entry.orig) {
+      edited.delete(ml);
+      return false;
+    }
+    // Steady state: the live value is exactly what our last assignment
+    // normalized to, and that assignment was this very text. Testing the
+    // generated text against `current` alone can never match — Chrome
+    // collapses `calc(700px + 600px)` to `calc(1300px)` on the way in — so
+    // the raw text assigned is remembered beside the normalized read-back.
+    // Without both halves this guard never fired and the 2s rescan rewrote
+    // every registered rule forever, each write forcing a style recalc.
+    if (current === entry.written && next === entry.applied) return false;
+    try {
+      ml.mediaText = next;
+      entry.applied = next;
+      entry.written = ml.mediaText; // Chrome normalizes the assigned text
+      return entry.written !== current;
+    } catch {
+      edited.delete(ml);
+      return false;
+    }
+  }
+
   function maybeEdit(ml, sheet) {
-    if (!ml || !shift || edited.has(ml)) return false;
+    if (!ml || !shift) return false;
+    const known = edited.get(ml);
+    if (known) return applyEdit(ml, known, shift);
     let orig;
     try { orig = ml.mediaText; } catch { return false; }
     if (!orig || !RX_ANY.test(orig)) return false;
-    const next = shiftText(orig, shift);
-    if (next === orig) return false;
-    try { ml.mediaText = next; } catch { return false; }
-    edited.set(ml, { orig, sheet, top: topSheet(sheet) });
-    return true;
+    const entry = { orig, written: orig, applied: null, sheet, top: topSheet(sheet) };
+    edited.set(ml, entry);
+    return applyEdit(ml, entry, shift);
   }
 
   function restoreEdits() {
     for (const [ml, entry] of edited) {
-      try { ml.mediaText = entry.orig; } catch {}
+      try {
+        // An edit made after our last scan is page-owned too. Leave it alone
+        // rather than restoring an older value over the top of it.
+        if (ml.mediaText === entry.written) ml.mediaText = entry.orig;
+      } catch {}
     }
     edited.clear();
   }
@@ -131,6 +184,17 @@ SQZ.mediaQueries ??= (() => {
   }
 
   function walkSheet(sheet) {
+    // A disabled alternate/theme sheet remains in document.styleSheets. Its
+    // media text is still worth shifting: a disabled sheet paints nothing, so
+    // editing it changes no pixel, the same ownership bookkeeping restores
+    // it, and the moment the page enables the sheet it is already correct
+    // rather than a rescan behind. Enabling is a pure CSSOM change that fires
+    // no mutation record, so "a rescan behind" means up to two seconds of
+    // desktop-width layout inside the squeeze on every theme toggle.
+    // What must not happen is CLONING it — adoptOpaque activates its clone,
+    // and teardown would lose the page's own disabled state.
+    let disabled = false;
+    try { disabled = !!sheet.disabled; } catch { return false; }
     // Whole-sheet gating (<link media>/<style media>): sheet.media is
     // readable and settable even on opaque sheets, and editing it leaves
     // the DOM attribute alone (verified: the attribute keeps its value).
@@ -138,9 +202,8 @@ SQZ.mediaQueries ??= (() => {
     let rules = null;
     try { rules = sheet.cssRules; } catch {} // SecurityError: cross-origin
     if (rules) {
-      counts.set(sheet, rules.length);
       changed = walkRules(rules, sheet) || changed;
-    } else {
+    } else if (!disabled) {
       adoptOpaque(sheet);
     }
     return changed;
@@ -213,6 +276,7 @@ SQZ.mediaQueries ??= (() => {
     // No clone while both sides are collapsed: at S=0 the clone would read
     // exactly like the original — all cost, no effect.
     if (!shift || copies.has(sheet)) return;
+    try { if (sheet.disabled) return; } catch { return; }
     const href = sheet.href;
     const anchor = ownerAnchor(sheet);
     if (!href || !/^https?:/i.test(href) || !anchor || failed.has(href)) return;
@@ -225,12 +289,17 @@ SQZ.mediaQueries ??= (() => {
     // job the old null placeholder did.
     const el = document.createElement('style');
     el.setAttribute(COPY_ATTR, href);
+    el.setAttribute(CLONE_VERSION_ATTR, '2');
     if (cond.media) el.media = cond.media;
     anchor.before ? anchor.node.before(el) : anchor.node.after(el);
-    // `filled` gates the disable: until the text lands the clone styles
-    // nothing, and turning the original off against an empty clone would
-    // leave the page unstyled for the length of the fetch.
-    const entry = { el, anchor: anchor.node, top: anchor.top, filled: false };
+    // Ownership flips only after the text lands: turning the original off
+    // against an empty clone would leave the page unstyled during the fetch.
+    const entry = {
+      el,
+      anchor: anchor.node,
+      top: anchor.top,
+      disabledByUs: false,
+    };
     copies.set(sheet, entry);
     const startedAt = epoch;
     let text = textCache.get(href);
@@ -266,21 +335,43 @@ SQZ.mediaQueries ??= (() => {
       dropCopy(sheet, entry);
       return;
     }
-    entry.filled = true;
+    // The page may have disabled the sheet while fetch was in flight. In that
+    // case its choice wins and the clone must never become active in its place.
+    try {
+      if (sheet.disabled) {
+        dropCopy(sheet, entry);
+        return;
+      }
+      sheet.disabled = true;
+      if (!sheet.disabled) {
+        dropCopy(sheet, entry);
+        return;
+      }
+    } catch {
+      dropCopy(sheet, entry);
+      return;
+    }
+    entry.disabledByUs = true;
+    el.setAttribute(DISABLED_ATTR, '');
+    try { sheet.ownerNode?.setAttribute(OFF_ATTR, ''); } catch {}
     walkSheet(el.sheet);
-    try { sheet.disabled = true; } catch {}
     fireApply();
   }
 
   function dropCopy(sheet, entry) {
     entry.el.remove();
-    // Only ever undo OUR disable: a clone that never got its text never
-    // disabled anything, and re-enabling there would fight a page that had
-    // turned the sheet off itself.
-    if (entry.filled) {
+    // Only ever undo OUR disable: an empty/failed clone and a sheet the page
+    // disabled during fetch carry no ownership flag.
+    if (entry.disabledByUs) {
       try { sheet.disabled = false; } catch {}
+      try { sheet.ownerNode?.removeAttribute(OFF_ATTR); } catch {}
     }
-    copies.delete(sheet);
+    // By identity, not by key. A slow fetch can resolve after maintainCopies
+    // already dropped its clone and a later scan minted a replacement under
+    // the same sheet; deleting by key there evicts the LIVE entry, leaving a
+    // clone in the DOM that stop() can no longer find to remove or re-enable
+    // — and the next walk mints a third on top of it.
+    if (copies.get(sheet) === entry) copies.delete(sheet);
   }
 
   // --- change tracking ---------------------------------------------------
@@ -349,31 +440,24 @@ SQZ.mediaQueries ??= (() => {
       if (!entry.anchor.isConnected || !entry.el.isConnected
           || entry.anchor.sheet !== entry.top) {
         dropCopy(sheet, entry);
-      } else if (entry.filled && !sheet.disabled) {
+      } else if (entry.disabledByUs && !sheet.disabled) {
         try { sheet.disabled = true; } catch {} // a theme switcher re-enabled it
       }
     }
   }
 
-  // Catches what no DOM event announces: rules added through insertRule
-  // (styled-components et al) and sheets whose <link> load raced the
-  // observer. A rule-count probe per sheet is near-free; a full walk runs
-  // only for sheets that actually moved (the registry makes it idempotent).
+  // Catches what no DOM event announces: mediaText assignment, replacement at
+  // an unchanged rule count, nested insertRule (styled-components), and sheets
+  // whose <link> load raced the observer. A full walk is required: no shallow
+  // count can distinguish those CSSOM mutations. Registry hits are read-only
+  // unless the page changed a value.
   function rescan() {
     if (SQZ.orphanGuard?.()) return;
     if (document.hidden) return;
     maintainCopies();
     if (!shift) return;
     let changed = false;
-    for (const sheet of [...document.styleSheets, ...document.adoptedStyleSheets]) {
-      let n = null;
-      try { n = sheet.cssRules.length; } catch {}
-      if (n === null) {
-        adoptOpaque(sheet); // an opaque sheet the observer missed
-      } else if (counts.get(sheet) !== n) {
-        changed = walkSheet(sheet) || changed;
-      }
-    }
+    changed = scanAll() || changed;
     // Registry entries whose sheet left the document restore nothing and
     // would pile up on a long-lived SPA; let them go. Reachability is asked
     // of the TOP-level sheet: an imported sheet has no ownerNode of its own
@@ -452,15 +536,7 @@ SQZ.mediaQueries ??= (() => {
       return;
     }
     let changed = false;
-    for (const [ml, entry] of edited) {
-      const next = shiftText(entry.orig, s);
-      try {
-        if (ml.mediaText !== next) {
-          ml.mediaText = next;
-          changed = true;
-        }
-      } catch {}
-    }
+    for (const [ml, entry] of edited) changed = applyEdit(ml, entry, s) || changed;
     changed = scanAll() || changed; // an S move can make fresh rules eligible
     changed = announce(s) || changed; // JS flips restyle with no CSS edit
     if (changed) fireApply();
@@ -479,7 +555,6 @@ SQZ.mediaQueries ??= (() => {
     jsHooks = false;
     for (const [sheet, entry] of copies) dropCopy(sheet, entry);
     copies.clear();
-    counts = new WeakMap();
     failed = new Set();
     shift = null;
     onApply = null;
