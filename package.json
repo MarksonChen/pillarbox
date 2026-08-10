@@ -2,6 +2,7 @@
   "name": "pillarbox-extension",
   "version": "0.12.0",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "lint": "eslint .",
     "test:unit": "node --test test/unit.mjs",
