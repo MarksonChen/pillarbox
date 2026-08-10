@@ -205,17 +205,16 @@ SQZ.clampDrag = (px, otherSide) => {
   return Math.max(0, Math.min(Math.round(Number(px)) || 0, cap));
 };
 
-// Mirrored drag: the far side keeps a fixed offset from the dragged (near)
-// side, so both move by the same amount and backtracking retraces the same
-// widths. The pair is clamped jointly: both sides stop together at the
-// MIN_GAP limit, and neither goes below 0.
-SQZ.mirrorPair = (px, offset) => {
-  const budget = Math.max(0, SQZ.viewportWidth() - SQZ.MIN_GAP);
-  let near = Math.max(0, Math.min(Math.round(px) || 0, budget));
-  const over = near + Math.max(0, near + offset) - budget;
-  if (over > 0) near = Math.max(0, near - Math.ceil(over / 2));
-  const far = Math.min(Math.max(0, near + offset), budget - near);
-  return { near, far };
+// Mirrored drag: the far side simply takes the dragged side's width, so
+// engaging centers the page and the two then resize as one. Both halves come
+// out of the same budget, so the pair stops once either would cross half of
+// it — leaving MIN_GAP between them, still centered. Floored rather than
+// rounded: half an odd budget twice over must not spend a px it does not
+// have. Purely a function of where the pointer is, which is what lets
+// backtracking retrace the same widths with nothing frozen at engage time.
+SQZ.mirrorWidth = (px) => {
+  const half = Math.floor(Math.max(0, SQZ.viewportWidth() - SQZ.MIN_GAP) / 2);
+  return Math.max(0, Math.min(Math.round(Number(px)) || 0, half));
 };
 
 // Clamp a stored pair for the current viewport (loads, resizes, cross-tab

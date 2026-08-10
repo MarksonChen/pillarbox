@@ -84,6 +84,29 @@ to sit exactly under the pointer, and a resize or zoom re-clamp is a
 correction, not a movement. `.dragging` overrides it either way, and
 `prefers-reduced-motion` turns all of it off.
 
+One glide happens *inside* a drag, and it is the far side's alone: a modifier
+links it to the dragged side, so it jumps to match on the way in and returns
+to the width it held when the key went down on the way out. Neither move is
+tracking the pointer, so both animate — a `.glide` class on that one panel,
+spelled specifically enough to outrank `.dragging`. The dragged panel is never
+in it. While that class is on, the panel's own handle bar goes dark: a lit bar
+carried across the screen points at an edge that has not arrived yet. That the
+modifier is sampled on `pointermove` also decides an edge: letting the key go
+without moving the pointer again leaves the sides linked until the next move,
+which is the same way engaging has always worked.
+
+**The link preview.** Resting on a handle with a modifier held lights the far
+side's bar too, before any drag — the near one is lit by `:hover` already.
+Hover alone can be read off `pointerenter`, but a key pressed while the
+pointer sits still cannot, so this is the one thing the module listens for
+outside its own shadow root: `keydown`/`keyup`/`blur` on `window`, captured
+(a page that stops key propagation must not blind it), passive, never
+prevented, and wired only while a handle is actually hovered. `blur` is not
+optional — a modifier still down when the window loses focus never delivers
+its keyup. The preview stands down for the length of a drag, where the
+pointer handler owns both bars and pointer capture means the hover never ends
+anyway; `finish()` hands the bar back on the way out.
+
 **Fixed bars and app shells.** `position:fixed` boxes are laid out against the
 viewport, and `position:absolute` boxes with no positioned ancestor (SPA app
 shells like claude.ai's `absolute inset-0` root) are anchored to the initial

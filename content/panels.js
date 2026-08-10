@@ -44,9 +44,20 @@ SQZ.panels ??= (() => {
    re-clamp is a correction, not a movement. */
 :host(.gliding) .panel { transition: transform 160ms ease-out, width 160ms ease-out; }
 :host(.dragging) .panel { transition: none; }
+/* The one exception inside a drag. When a modifier links the far side it
+   jumps to match the dragged one, and when the modifier is let go it returns
+   to where it started: both are discrete moves the pointer is not tracking,
+   so both glide even though everything else in a drag must land instantly.
+   Listed twice because the drag's own "transition: none" outranks a lone
+   .panel.glide, while the bare selector is what still applies if the pointer
+   comes up mid-glide and .dragging goes away underneath it. */
+:host(.dragging) .panel.glide,
+.panel.glide { transition: transform 160ms ease-out, width 160ms ease-out; }
 @media (prefers-reduced-motion: reduce) {
   .panel,
-  :host(.gliding) .panel { transition: none; }
+  :host(.gliding) .panel,
+  :host(.dragging) .panel.glide,
+  .panel.glide { transition: none; }
 }
 .handle {
   position: absolute;
@@ -69,20 +80,36 @@ SQZ.panels ??= (() => {
    aims. Clamping the offset to (width - 10px) keeps the full 10px live and
    flush against the last reachable column. Inert while a side is wider than
    the handle, so an open panel's handle still straddles its edge as before. */
-.panel.left .handle { right: min(-5px, calc(var(--pb-w, 999px) - 10px)); }
-.panel.right .handle { left: min(-5px, calc(var(--pb-w, 999px) - 10px)); }
+.panel { --pb-off: min(-5px, calc(var(--pb-w, 999px) - 10px)); }
+.panel.left .handle { right: var(--pb-off); }
+.panel.right .handle { left: var(--pb-off); }
 .handle::after {
   content: "";
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 4px;
   width: 2px;
   background: transparent;
   transition: background 120ms;
 }
+/* The visible bar rides the panel's inner EDGE, not the middle of the hit
+   area — those coincide only while the handle straddles that edge. Once the
+   clamp above pulls the handle inward the two part company, and a bar left in
+   the middle floats a few px off the window border exactly when the side is
+   collapsed and the border is all there is to aim at. Centring it on the edge
+   means 9px + offset from the handle's left going one way and -1px - offset
+   going the other; clamped to [0, 8] so the 2px bar stays wholly inside the
+   10px handle, i.e. wholly inside the viewport, and ends up flush against the
+   border rather than half beyond it. */
+.panel.left .handle::after { left: clamp(0px, calc(9px + var(--pb-off)), 8px); }
+.panel.right .handle::after { left: clamp(0px, calc(-1px - var(--pb-off)), 8px); }
 .handle:hover::after,
 .handle.active::after { background: #3b82f6; }
+/* ...but never while that panel is moving under its own steam. The linked
+   side's jump and its trip home carry the handle across the screen, and a
+   lit bar riding along points at an edge that is not there yet. Only the
+   linked side ever glides mid-drag, so only it ever goes dark. */
+.panel.glide .handle::after { background: transparent; }
 .readout {
   position: absolute;
   top: 50%;
@@ -288,14 +315,81 @@ SQZ.panels ??= (() => {
     host?.style.setProperty('display', visible ? 'block' : 'none', 'important');
   }
 
+  // Resting on a handle with a modifier held previews the link a drag would
+  // make: the far side's bar lights up too, so the gesture says what it is
+  // about to do before anything moves. Inert during a drag — there the
+  // pointer handler owns both bars, and pointer capture means the hover
+  // never ends anyway, so the two would only fight over the same class.
+  let hoverSide = null;   // handle the pointer is resting on, if any
+  let dragSide = null;    // handle being dragged, if any
+  let keysWatched = false;
+  const KEY_OPTS = { capture: true, passive: true };
+
+  const heldModifier = (e) => e.altKey || e.ctrlKey || e.metaKey || e.shiftKey;
+
+  function showLink(on) {
+    if (!els || !hoverSide || dragSide) return;
+    const far = hoverSide === 'left' ? 'right' : 'left';
+    els[far].handle.classList.toggle('active', on);
+  }
+
+  const onKey = (e) => showLink(heldModifier(e));
+  // A modifier still down when the window loses focus never delivers its
+  // keyup, and the preview would sit there lit until the pointer moved.
+  const onBlur = () => showLink(false);
+
+  function watchKeys(on) {
+    if (on === keysWatched) return;
+    keysWatched = on;
+    // Captured on window, the earliest point in the path, so a page that
+    // stops key events from propagating cannot blind the preview. Passive
+    // and never prevented: this reads the modifier state, it never takes
+    // the key away from the page.
+    const wire = on ? 'addEventListener' : 'removeEventListener';
+    window[wire]('keydown', onKey, KEY_OPTS);
+    window[wire]('keyup', onKey, KEY_OPTS);
+    window[wire]('blur', onBlur, KEY_OPTS);
+  }
+
+  // `e` is the pointer event that carries the modifier state on the way in;
+  // on the way out there is nothing to read and nothing to light.
+  function setHover(next, e) {
+    if (next === hoverSide) return;
+    showLink(false); // still reading the side being left
+    hoverSide = next;
+    watchKeys(next !== null);
+    if (next && e) showLink(heldModifier(e));
+  }
+
   function wireDrag(side, handle, readout) {
     const other = side === 'left' ? 'right' : 'left';
     let pointerId = null;
     let startX = 0;
     let started = false;
-    let mirroring = false; // modifier key held: the far side follows
-    let mirrorOffset = 0;  // far width - near width, frozen when engaging
-    let mirrorZoom = 1;    // the factor that offset is expressed in
+    let mirroring = false; // modifier key held: the far side matches this one
+    let mirrorFrom = 0;    // far width when the modifier engaged; where it goes back to
+    let mirrorZoom = 1;    // the factor mirrorFrom is expressed in
+    let farGlideTimer = 0;
+
+    // Let the far panel — and only it — animate its next width change, then
+    // take the permission back. The near panel must never be in here: it has
+    // to sit exactly under the pointer. Timed off like the host's glide(), so
+    // a pointer frame arriving later is not caught mid-transition; while the
+    // window is open the far side eases toward each new width instead, which
+    // is what makes the jump read as a move rather than a jump cut.
+    function glideFar() {
+      const panel = els?.[other].panel;
+      if (!panel) return;
+      panel.classList.add('glide');
+      clearTimeout(farGlideTimer);
+      farGlideTimer = setTimeout(() => {
+        farGlideTimer = 0;
+        panel.classList.remove('glide'); // the captured one: it may be off-DOM
+      }, SLIDE_MS + 60);
+    }
+
+    handle.addEventListener('pointerenter', (e) => setHover(side, e));
+    handle.addEventListener('pointerleave', () => setHover(null));
 
     handle.addEventListener('pointerdown', (e) => {
       if (!callbacks || !e.isPrimary || e.button !== 0) return;
@@ -319,6 +413,7 @@ SQZ.panels ??= (() => {
       if (!started) {
         if (Math.abs(e.clientX - startX) < DRAG_THRESHOLD) return;
         started = true;
+        dragSide = side; // the hover preview stands down for the duration
         host.classList.add('dragging');
         handle.classList.add('active');
         if (appearance.showReadout) readout.classList.add('show');
@@ -327,30 +422,42 @@ SQZ.panels ??= (() => {
         callbacks.onDragStart?.(side);
       }
       const pointerPx = side === 'left' ? e.clientX : SQZ.viewportWidth() - e.clientX;
-      // Any modifier key links the far side: it moves by the same amount for
-      // as long as the key is held (pressing/releasing mid-drag both work).
+      // Any modifier key links the far side: it takes the dragged side's own
+      // width for as long as the key is held, so engaging centers the page
+      // and the two move together from there (pressing/releasing mid-drag
+      // both work).
       const modifier = e.altKey || e.ctrlKey || e.metaKey || e.shiftKey;
       if (modifier !== mirroring) {
         mirroring = modifier;
         if (mirroring) {
-          mirrorOffset = widths[other] - widths[side];
+          mirrorFrom = widths[other];
           mirrorZoom = zoom;
+        } else {
+          // Letting the modifier go undoes the link rather than freezing it:
+          // the far side returns to the width it had when the key went down,
+          // so a mirrored excursion costs nothing if it turns out not to be
+          // what you wanted. Clamped on the way back — the near side has
+          // moved since, and MIN_GAP outranks the width being restored.
+          widths[other] = SQZ.clampDrag(mirrorFrom, widths[side]);
         }
+        // Both directions are a jump the pointer is not tracking, so both
+        // glide (see the .glide rule). The page itself reflows at once
+        // underneath, which is the same choreography as every other glide.
+        glideFar();
         els?.[other].handle.classList.toggle('active', mirroring);
         if (appearance.showReadout) {
           els?.[other].readout.classList.toggle('show', mirroring);
         }
       }
       if (mirroring) {
-        // The offset is CSS px like the widths it came from, so a zoom
-        // change mid-drag has to move it too (see setZoom).
+        // mirrorFrom is CSS px like the widths it came from, so a zoom change
+        // mid-drag has to move it too (see setZoom). The live widths need no
+        // such care: both are a pure function of where the pointer is now.
         if (mirrorZoom !== zoom) {
-          mirrorOffset *= mirrorZoom / zoom;
+          mirrorFrom *= mirrorZoom / zoom;
           mirrorZoom = zoom;
         }
-        const pair = SQZ.mirrorPair(pointerPx, mirrorOffset);
-        widths[side] = pair.near;
-        widths[other] = pair.far;
+        widths[side] = widths[other] = SQZ.mirrorWidth(pointerPx);
       } else {
         widths[side] = SQZ.clampDrag(pointerPx, widths[other]);
       }
@@ -366,6 +473,7 @@ SQZ.panels ??= (() => {
       pointerId = null;
       if (!started) return;
       started = false;
+      dragSide = null;
       dragClickPending = true; // the click about to fire carries this drag
       mirroring = false;
       host?.classList.remove('dragging');
@@ -375,6 +483,10 @@ SQZ.panels ??= (() => {
         els[other].handle.classList.remove('active');
         els[other].readout.classList.remove('show');
       }
+      // Handing the far bar back to the preview: a drag that ends with the
+      // modifier still down, on a handle the pointer has not left, leaves
+      // the link exactly as live as it was before the drag began.
+      showLink(heldModifier(e));
       unlockSelection();
       callbacks?.onDragEnd?.(side);
     };
@@ -507,6 +619,11 @@ SQZ.panels ??= (() => {
     host.classList.remove('dragging');
     clearTimeout(glideTimer);
     glideTimer = 0;
+    // The preview's window listeners are the only thing this module leaves
+    // outside its own shadow root, so they go before the panels do.
+    hoverSide = null;
+    dragSide = null;
+    watchKeys(false);
     const oldHost = host;
     const oldEls = els;
     host = null;

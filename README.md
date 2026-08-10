@@ -18,7 +18,7 @@ A Chrome extension that squeezes a page's content left/right/inward using two re
 | --- | --- |
 | Turn the sidebars on or off | Click the toolbar icon, or press `Alt+Shift+S` (rebind it at `chrome://extensions/shortcuts`) |
 | Resize one side | Drag the sidebar edge |
-| Resize both sides at once | Hold any modifier key (Shift, Ctrl, Alt or ⌘) and drag |
+| Center the page and resize both sides at once | Hold any modifier key (Shift, Ctrl, Alt or ⌘) and drag — the far side matches the one you drag, so the page centers the moment you press the key and both sides resize together from there. Let the key go mid-drag and the far side glides back to where it started. Hold the key while just resting on an edge and both edges light up, showing what the drag would link |
 | Collapse one side | Double-click it |
 | Bring a collapsed side back | Drag from the page edge or double-click the edge |
 | Bring both collapsed sides back | Click the toolbar icon — with both sides collapsed it revives them at your default widths instead of toggling off |

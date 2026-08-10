@@ -447,8 +447,15 @@ async function main() {
       (v) => v.ml === `${DEF.l}px` && v.mr === `${DEF.r}px` && v.mlPrio === 'important',
       4000, (v) => `ml=${v.ml} mr=${v.mr} prio=${v.mlPrio}`);
     check('panels host mounted', s.host === true);
-    check('fixed navbar inset to the default widths',
-      s.nav && near(s.nav.left, DEF.l) && near(s.nav.width, inner(s)), JSON.stringify(s.nav));
+    // Its own wait, not a read off the margins snapshot: the margins land in
+    // the toggle itself while the bars are inset by a scan a beat later, so
+    // sampling both at the first moment the margins are right is a race that
+    // only ever shows up on a loaded machine. Everything below reads the
+    // snapshot this settles on, which is the more settled one anyway.
+    s = await checkFor('fixed navbar inset to the default widths',
+      pageSnap,
+      (v) => v.nav && near(v.nav.left, DEF.l) && near(v.nav.width, inner(v)),
+      3000, (v) => JSON.stringify(v.nav));
     check('sticky subheader reflowed by margins alone',
       s.sticky && near(s.sticky.left, DEF.l) && near(s.sticky.width, inner(s)),
       JSON.stringify(s.sticky));
@@ -617,23 +624,40 @@ async function main() {
     // clicked. Invisible on macOS, where overlay scrollbars put the viewport
     // edge at the window edge; on Windows the classic scrollbar moves it ~15px
     // in and the overhang becomes a dead strip the gesture aims straight at.
-    await checkFor('collapsed handle lies wholly inside the layout viewport',
+    const collapsedHandle = await checkFor('collapsed handle lies wholly inside the layout viewport',
       () => evalIn(page, `(() => {
         const root = document.querySelector('pillarbox-host')?.shadowRoot;
         if (!root) return null;
         const h = root.querySelector('.panel.left .handle');
         if (!h) return null;
         const r = h.getBoundingClientRect();
+        // The collapse glides, so poll until the panel is really at 0 —
+        // the handle's own geometry hangs off that width.
+        const panelW = Math.round(parseFloat(
+          getComputedStyle(root.querySelector('.panel.left')).width));
         // Layout width without trusting innerWidth, which the MAIN-world hook
         // lies about while squeezed: the root's border box plus our margins.
         const de = document.documentElement, cs = getComputedStyle(de);
         const layoutW = de.getBoundingClientRect().width
           + parseFloat(cs.marginLeft) + parseFloat(cs.marginRight);
-        return { left: Math.round(r.left), right: Math.round(r.right),
-          width: Math.round(r.width), layoutW: Math.round(layoutW) };
+        // The visible bar inside it, in page coordinates.
+        const bar = getComputedStyle(h, '::after');
+        return { panelW, left: Math.round(r.left), right: Math.round(r.right),
+          width: Math.round(r.width), layoutW: Math.round(layoutW),
+          barLeft: Math.round(r.left + parseFloat(bar.left)),
+          barWidth: Math.round(parseFloat(bar.width)) };
       })()`),
-      (v) => v && v.left >= 0 && v.right <= v.layoutW && v.width >= 10,
+      (v) => v && v.panelW === 0
+        && v.left >= 0 && v.right <= v.layoutW && v.width >= 10,
       3000, (v) => JSON.stringify(v));
+    // The hit area may be pulled inward off the edge it marks; the bar the
+    // user actually aims at may not. Collapsed, the border IS the target, so
+    // the bar has to sit flush against it — not floating a few px inside,
+    // which is where it lands if it stays centred in a hit area that has
+    // been clamped inward.
+    check('the collapsed handle\'s bar sits flush against the border',
+      collapsedHandle?.barLeft === 0 && collapsedHandle?.barWidth > 0,
+      JSON.stringify(collapsedHandle));
     await mouse('mousePressed', 2, 450, 1); await mouse('mouseReleased', 2, 450, 1);
     await mouse('mousePressed', 2, 450, 2); await mouse('mouseReleased', 2, 450, 2);
     await checkFor('dblclick collapses and restores the left side',
@@ -689,43 +713,154 @@ async function main() {
     await mouse('mouseReleased', 320, 450, 1);
     await waitFor(async () => (await pageSnap()).ml === '320px', 3000, 'drag back to 320');
 
-    // Mirrored drag: holding any modifier while dragging moves the other
-    // side by the same amount; releasing it mid-drag un-links again.
-    // Shift-drag left 320 -> 420 (right follows 200 -> 300), then drop the
-    // modifier and pull back to 380 (right must stay at 300).
+    // Mirrored drag: holding any modifier makes the other side MATCH the
+    // dragged one, so the page centers and both resize together. Shift-drag
+    // left 320 -> 420 and the right side lands on 420 too — 300 is what it
+    // would read if the far side merely followed by the same amount, which
+    // is the behaviour this replaced. Then drop the modifier and pull back
+    // to 380: releasing UNDOES the link rather than freezing it, so the
+    // right side goes home to the 200 it held when the key went down. 420
+    // there would mean the excursion was frozen in place instead.
     await mouse('mousePressed', 320, 450, 1);
     for (const x of [326, 360, 400, 420]) await mouse('mouseMoved', x, 450, 0, SHIFT);
     await mouse('mouseMoved', 380, 450);
     await mouse('mouseReleased', 380, 450, 1);
-    await checkFor('modifier-drag moves both sides; releasing mid-drag un-links',
-      pageSnap, (v) => v.ml === '380px' && v.mr === '300px', 3000,
-      (v) => `ml=${v.ml} mr=${v.mr} (expected 380/300)`);
+    await checkFor('releasing the modifier mid-drag sends the far side home',
+      pageSnap,
+      (v) => v.ml === '380px' && v.mr === '200px' && v.panel?.right === 200,
+      3000, (v) => `ml=${v.ml} mr=${v.mr} panel=${JSON.stringify(v.panel)}`
+        + ' (expected 380/200; 420 = frozen, not restored)');
 
-    // Mirrored min-gap clamp: both sides must stop TOGETHER when only the
-    // 200px gap is left. offset = 300 - 380 = -80 and budget = LW - MIN_GAP,
-    // so the near side stops at floor((budget + 80) / 2) and the far side 80
-    // behind it.
-    const mirrorLeft = Math.floor((LW - 200 + 80) / 2);
-    const mirrorRight = mirrorLeft - 80;
+    // The far side's jump to match and its trip home are the only width
+    // changes inside a drag that animate, and the CSS says so by outranking
+    // the drag's own `transition: none` — a specificity regression there is
+    // silent and this is the cheap way to catch it. Asserted on the rules
+    // rather than mid-gesture: the class is gone 220ms after it goes on, and
+    // no round trip is reliably inside that.
+    const glideCss = await evalIn(page, `(() => {
+      const el = document.querySelector('pillarbox-host');
+      const panel = el?.shadowRoot?.querySelector('.panel.right');
+      if (!panel) return null;
+      const hadDrag = el.classList.contains('dragging');
+      const hadGlide = panel.classList.contains('glide');
+      el.classList.add('dragging');
+      panel.classList.add('glide');
+      const linked = getComputedStyle(panel).transitionProperty;
+      panel.classList.remove('glide');
+      const dragged = getComputedStyle(panel).transitionProperty;
+      if (hadGlide) panel.classList.add('glide');
+      if (!hadDrag) el.classList.remove('dragging');
+      return { linked, dragged };
+    })()`);
+    check('the linked side glides mid-drag; the dragged side stays instant',
+      glideCss && /width/.test(glideCss.linked) && !/width/.test(glideCss.dragged),
+      JSON.stringify(glideCss));
+
+    // ...and while it glides, its bar goes dark: a lit bar carried across the
+    // screen points at an edge that has not arrived. Staged, with the read in
+    // a later task than the class change — the bar cross-fades over 120ms, so
+    // a colour sampled in the same task still comes back as the old one.
+    const BLUE = 'rgb(59, 130, 246)';
+    const CLEAR = 'rgba(0, 0, 0, 0)';
+    const rightBar = () => evalIn(page, `(() => {
+      const h = document.querySelector('pillarbox-host')
+        ?.shadowRoot?.querySelector('.panel.right .handle');
+      return h ? getComputedStyle(h, '::after').backgroundColor : null;
+    })()`);
+    const rightCls = (glide, active) => evalIn(page, `(() => {
+      const root = document.querySelector('pillarbox-host')?.shadowRoot;
+      root.querySelector('.panel.right').classList.toggle('glide', ${glide});
+      root.querySelector('.panel.right .handle').classList.toggle('active', ${active});
+    })()`);
+    await rightCls(false, true);
+    await checkFor('a linked side\'s bar is lit while it sits still',
+      rightBar, (c) => c === BLUE, 1500, (c) => `${c} (want ${BLUE})`);
+    await rightCls(true, true);
+    await checkFor('the bar goes dark while that side glides',
+      rightBar, (c) => c === CLEAR, 1500, (c) => `${c} (want ${CLEAR})`);
+    await rightCls(false, false);
+
+    // Mirrored min-gap clamp: two equal sides spending one budget, so each
+    // stops at floor((layoutWidth - MIN_GAP) / 2) and the gap survives
+    // centred. Floor matters on an odd budget — hence the check on the sum.
+    const mirrorBoth = Math.floor((LW - 200) / 2);
     await mouse('mousePressed', 380, 450, 1);
     for (const x of [400, 800, FAR]) await mouse('mouseMoved', x, 450, 0, SHIFT);
     await mouse('mouseReleased', FAR, 450, 1);
-    await checkFor('mirrored drag stops both sides at the min gap',
-      pageSnap, (v) => v.ml === `${mirrorLeft}px` && v.mr === `${mirrorRight}px`, 3000,
-      (v) => `ml=${v.ml} mr=${v.mr} (expected ${mirrorLeft}/${mirrorRight})`);
+    // The far panel glides into place, so wait for it and not just the
+    // margin — the right handle's coordinates below hang off its width.
+    await checkFor('mirrored drag stops both sides at the min gap, still centered',
+      pageSnap,
+      (v) => v.ml === `${mirrorBoth}px` && v.mr === `${mirrorBoth}px`
+        && v.panel?.left === mirrorBoth && v.panel?.right === mirrorBoth
+        && mirrorBoth * 2 <= LW - 200,
+      3000, (v) => `ml=${v.ml} mr=${v.mr} panel=${JSON.stringify(v.panel)}`
+        + ` (expected ${mirrorBoth} on both)`);
 
-    // Mirror works from the right handle too; shift-drag it (at LW minus the
-    // right width) out to LW - 200: right lands on 200 and left follows to
-    // 280, keeping the 80px offset.
-    const rightHandle = LW - mirrorRight;
+    // Mirror works from the right handle too: shift-drag it (at LW minus the
+    // right width) inward until the right side reads 280, and the left comes
+    // down from its clamped half to match.
+    const rightHandle = LW - mirrorBoth;
     await mouse('mousePressed', rightHandle, 450, 1);
-    for (const x of [rightHandle + 7, rightHandle + 150, LW - 200]) {
+    for (const x of [rightHandle + 7, rightHandle + 150, LW - 280]) {
       await mouse('mouseMoved', x, 450, 0, SHIFT);
     }
-    await mouse('mouseReleased', LW - 200, 450, 1);
+    await mouse('mouseReleased', LW - 280, 450, 1);
     await checkFor('modifier-drag mirrors from the right handle too',
-      pageSnap, (v) => v.ml === '280px' && v.mr === '200px', 3000,
-      (v) => `ml=${v.ml} mr=${v.mr} (expected 280/200)`);
+      pageSnap,
+      (v) => v.ml === '280px' && v.mr === '280px'
+        && v.panel?.left === 280 && v.panel?.right === 280,
+      3000, (v) => `ml=${v.ml} mr=${v.mr} panel=${JSON.stringify(v.panel)}`
+        + ' (expected 280 on both)');
+
+    // Plain-drag the right side back down to 200. A mirrored drag can only
+    // ever end symmetric, and the gestures below need the asymmetric 280/200
+    // to prove anything — a reset from 200/200 would land on the defaults it
+    // started on.
+    await mouse('mousePressed', LW - 280, 450, 1);
+    for (const x of [LW - 273, LW - 240, LW - 200]) await mouse('mouseMoved', x, 450);
+    await mouse('mouseReleased', LW - 200, 450, 1);
+    await waitFor(async () => {
+      const v = await pageSnap();
+      return v.ml === '280px' && v.mr === '200px';
+    }, 3000, 'plain drag back to the asymmetric 280/200');
+
+    // Resting on a handle with a modifier held previews the link before any
+    // drag: the far side's bar lights too, so the gesture says what it will
+    // do while there is still time not to do it. Dispatched with buttons:0 —
+    // the drag helper above holds the primary button down on every move,
+    // which is a drag, not a hover.
+    const hover = (x, modifiers = 0) => cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x, y: 450, buttons: 0, pointerType: 'mouse', modifiers,
+    }, page);
+    const bothBars = () => evalIn(page, `(() => {
+      const root = document.querySelector('pillarbox-host')?.shadowRoot;
+      const bar = (s) => {
+        const h = root?.querySelector('.panel.' + s + ' .handle');
+        return h ? getComputedStyle(h, '::after').backgroundColor : null;
+      };
+      return { left: bar('left'), right: bar('right') };
+    })()`);
+    await hover(600); // open page, clear of either handle
+    await checkFor('no modifier, no hover: both bars dark',
+      bothBars, (v) => v.left === CLEAR && v.right === CLEAR, 1500,
+      (v) => JSON.stringify(v));
+    await hover(280, SHIFT); // onto the left handle with the modifier down
+    await checkFor('modifier + hover previews the link on both bars',
+      bothBars, (v) => v.left === BLUE && v.right === BLUE, 1500,
+      (v) => JSON.stringify(v));
+    // Releasing the key while still resting there un-previews it, without
+    // the pointer having to move off: the window keydown/keyup watch is the
+    // only thing that can notice.
+    await cdp.send('Input.dispatchKeyEvent',
+      { type: 'keyUp', key: 'Shift', code: 'ShiftLeft', windowsVirtualKeyCode: 16 }, page);
+    await checkFor('letting the modifier go un-previews the far side',
+      bothBars, (v) => v.left === BLUE && v.right === CLEAR, 1500,
+      (v) => JSON.stringify(v));
+    await hover(600);
+    await checkFor('leaving the handle clears the near bar too',
+      bothBars, (v) => v.left === CLEAR && v.right === CLEAR, 1500,
+      (v) => JSON.stringify(v));
 
     // Plain double-click on a panel's BODY (x=100, well away from the
     // handle at ~280) collapses that side — the whole sidebar is a valid
@@ -767,6 +902,30 @@ async function main() {
       const v = await pageSnap();
       return v.ml === '0px' && v.mr === '0px';
     }, 3000, 'both sides collapsed');
+    // The right side's bar is the mirror image of the left's — a different
+    // offset off a different edge — so it gets its own flush-against-the-
+    // border check rather than riding on the left one passing.
+    await checkFor('the right handle\'s bar sits flush against its border too',
+      () => evalIn(page, `(() => {
+        const root = document.querySelector('pillarbox-host')?.shadowRoot;
+        const h = root?.querySelector('.panel.right .handle');
+        if (!h) return null;
+        const r = h.getBoundingClientRect();
+        const bar = getComputedStyle(h, '::after');
+        const de = document.documentElement, cs = getComputedStyle(de);
+        return {
+          panelW: Math.round(parseFloat(
+            getComputedStyle(root.querySelector('.panel.right')).width)),
+          left: Math.round(r.left), width: Math.round(r.width),
+          barRight: Math.round(r.left + parseFloat(bar.left)
+            + parseFloat(bar.width)),
+          layoutW: Math.round(de.getBoundingClientRect().width
+            + parseFloat(cs.marginLeft) + parseFloat(cs.marginRight)),
+        };
+      })()`),
+      (v) => v && v.panelW === 0 && v.width >= 10 && v.left >= 0
+        && v.barRight === v.layoutW,
+      3000, (v) => JSON.stringify(v));
     const revive = await toggleViaWorker(`${BASE}/page.html`);
     await checkFor('toolbar click restores defaults when both sides are collapsed',
       pageSnap,
