@@ -1,9 +1,10 @@
 <p align="center">
+  <a href="https://chromewebstore.google.com/detail/dkpbgnpcfibeanmdbidlggfijfcdlidg"><img src="https://img.shields.io/chrome-web-store/v/dkpbgnpcfibeanmdbidlggfijfcdlidg?label=chrome%20web%20store" alt="Chrome Web Store"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/MarksonChen/pillarbox" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="Zero dependencies">
 </p>
 
-<h1 align="center">Pillarbox</h1>
+<h1 align="center"><a href="https://chromewebstore.google.com/detail/dkpbgnpcfibeanmdbidlggfijfcdlidg">Pillarbox</a></h1>
 
 <p align="center">A Chrome extension that squeezes a page's content left/right/inward using two resizable sidebars.</p>
 
@@ -26,7 +27,7 @@
 ## Good to Know
 
 > [!NOTE]
-> Pillarbox is published on the Chrome Web Store and supported on Chrome.
+> Pillarbox is [published on the Chrome Web Store](https://chromewebstore.google.com/detail/dkpbgnpcfibeanmdbidlggfijfcdlidg) and supported on Chrome.
 > Other Chromium browsers (Brave, Vivaldi, Arc, Thorium, etc.) install it from
 > the same listing and should work, but are not tested.
 
