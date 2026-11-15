@@ -83,11 +83,34 @@ SQZ.mediaQueries ??= (() => {
   // file and for the MAIN-world matchMedia hook (content/match-media.js).
   const XF = globalThis.__pillarboxMqShift;
   const RX_ANY = XF.ANY;
-  const shiftText = (text, s) => XF.shiftMediaText(text, s, innerWidth, innerHeight);
 
   // The env substitutions bake in the viewport, so a resize can move their
   // verdict even when S is unchanged; this key says "same viewport".
   const envKey = () => innerWidth + 'x' + innerHeight;
+
+  // Memoized per (shift, viewport). A site's thousands of media rules share
+  // a few dozen distinct texts, and each one is re-derived on every drag
+  // flush and again on every 2s rescan — nine regex passes a call (~0.7µs,
+  // so milliseconds per pass on a big page, inside a drag) for an answer
+  // that cannot change until S or the viewport does. The key holds every
+  // input the transform reads besides the text itself, so a stale answer is
+  // impossible by construction; the size cap only bounds a page that mints
+  // unique media texts without end.
+  const shiftMemo = new Map();
+  let shiftMemoKey = '';
+  const shiftText = (text, s) => {
+    const key = s + '|' + envKey();
+    if (key !== shiftMemoKey || shiftMemo.size >= 512) {
+      shiftMemo.clear();
+      shiftMemoKey = key;
+    }
+    let out = shiftMemo.get(text);
+    if (out === undefined) {
+      out = XF.shiftMediaText(text, s, innerWidth, innerHeight);
+      shiftMemo.set(text, out);
+    }
+    return out;
+  };
 
   // --- registry ----------------------------------------------------------
   // The sheet whose ownerNode says whether a registry entry is still
@@ -149,14 +172,17 @@ SQZ.mediaQueries ??= (() => {
     return applyEdit(ml, entry, shift);
   }
 
+  // Hand one list back to the page. An edit made after our last scan is
+  // page-owned too: leave it alone rather than restoring an older value over
+  // the top of it.
+  function restoreEdit(ml, entry) {
+    try {
+      if (ml.mediaText === entry.written) ml.mediaText = entry.orig;
+    } catch {}
+  }
+
   function restoreEdits() {
-    for (const [ml, entry] of edited) {
-      try {
-        // An edit made after our last scan is page-owned too. Leave it alone
-        // rather than restoring an older value over the top of it.
-        if (ml.mediaText === entry.written) ml.mediaText = entry.orig;
-      } catch {}
-    }
+    for (const [ml, entry] of edited) restoreEdit(ml, entry);
     edited.clear();
   }
 
@@ -458,11 +484,19 @@ SQZ.mediaQueries ??= (() => {
     if (!shift) return;
     let changed = false;
     changed = scanAll() || changed;
-    // Registry entries whose sheet left the document restore nothing and
-    // would pile up on a long-lived SPA; let them go. Reachability is asked
-    // of the TOP-level sheet: an imported sheet has no ownerNode of its own
-    // and a constructed one never has any, so keying the question on the
-    // walked sheet made both kinds immortal.
+    // Registry entries whose sheet left the document would pile up on a
+    // long-lived SPA; let them go — restored first, not merely forgotten. A
+    // <style> or <link> mints a fresh sheet on every insertion, so its old
+    // lists are dead either way, but a constructed sheet is not: the page
+    // can drop one from adoptedStyleSheets and adopt the same object again
+    // later (theme swaps do exactly that), lists and all. Forgotten with
+    // our shifted text still in it, such a list comes back looking like an
+    // original, collects a second shift on top, and is "restored" at stop()
+    // to text that already carried one — wrong breakpoints for the rest of
+    // the page's life. Reachability is asked of the TOP-level sheet: an
+    // imported sheet has no ownerNode of its own and a constructed one never
+    // has any, so keying the question on the walked sheet made both kinds
+    // immortal.
     let adopted = null;
     for (const [ml, entry] of edited) {
       const top = entry.top;
@@ -475,7 +509,10 @@ SQZ.mediaQueries ??= (() => {
         adopted ??= new Set(document.adoptedStyleSheets);
         gone = !adopted.has(top);
       }
-      if (gone && !copies.has(entry.sheet)) edited.delete(ml);
+      if (gone && !copies.has(entry.sheet)) {
+        restoreEdit(ml, entry);
+        edited.delete(ml);
+      }
     }
     if (changed) fireApply();
   }
@@ -556,6 +593,7 @@ SQZ.mediaQueries ??= (() => {
     for (const [sheet, entry] of copies) dropCopy(sheet, entry);
     copies.clear();
     failed = new Set();
+    shiftMemo.clear();
     shift = null;
     onApply = null;
   }

@@ -44,10 +44,11 @@ SQZ.panels ??= (() => {
    re-clamp is a correction, not a movement. */
 :host(.gliding) .panel { transition: transform 160ms ease-out, width 160ms ease-out; }
 :host(.dragging) .panel { transition: none; }
-/* The one exception inside a drag. When a modifier links the far side it
-   jumps to match the dragged one, and when the modifier is let go it returns
-   to where it started: both are discrete moves the pointer is not tracking,
-   so both glide even though everything else in a drag must land instantly.
+/* The one exception inside a drag. When Shift or Ctrl links the far side it
+   jumps to match the dragged one, and when that modifier is let go it
+   returns to where it started: both are discrete moves the pointer is not
+   tracking, so both glide even though everything else in a drag — an Alt/⌘
+   slide's far side included, from first frame to last — must land instantly.
    Listed twice because the drag's own "transition: none" outranks a lone
    .panel.glide, while the bare selector is what still applies if the pointer
    comes up mid-glide and .dragging goes away underneath it. */
@@ -327,6 +328,19 @@ SQZ.panels ??= (() => {
 
   const heldModifier = (e) => e.altKey || e.ctrlKey || e.metaKey || e.shiftKey;
 
+  // Which link a pointer event's modifiers ask a drag for. Shift or Ctrl
+  // MIRROR the far side: it takes the dragged side's width, so the page
+  // centers and the two resize as one. Alt or ⌘ SLIDE the pair: whatever the
+  // dragged side gains the far side gives up, so the page keeps its width
+  // and moves. With both kinds down slide wins — one of them has to.
+  // Everything that is not a drag still treats the modifiers alike: the
+  // hover preview lights the far bar for either link, and modifier +
+  // double-click resets both sides whichever key it is.
+  const linkMode = (e) => {
+    if (e.altKey || e.metaKey) return 'slide';
+    return e.shiftKey || e.ctrlKey ? 'mirror' : null;
+  };
+
   function showLink(on) {
     if (!els || !hoverSide || dragSide) return;
     const far = hoverSide === 'left' ? 'right' : 'left';
@@ -366,9 +380,10 @@ SQZ.panels ??= (() => {
     let pointerId = null;
     let startX = 0;
     let started = false;
-    let mirroring = false; // modifier key held: the far side matches this one
-    let mirrorFrom = 0;    // far width when the modifier engaged; where it goes back to
-    let mirrorZoom = 1;    // the factor mirrorFrom is expressed in
+    let link = null;       // 'mirror' | 'slide' | null: how a held modifier ties the far side in
+    let linkFrom = 0;      // far width when the link engaged; where a mirror's goes back to
+    let linkTotal = 0;     // both widths together at that moment: what a slide conserves
+    let linkZoom = 1;      // the factor linkFrom and linkTotal are expressed in
     let farGlideTimer = 0;
 
     // Let the far panel — and only it — animate its next width change, then
@@ -422,42 +437,69 @@ SQZ.panels ??= (() => {
         callbacks.onDragStart?.(side);
       }
       const pointerPx = side === 'left' ? e.clientX : SQZ.viewportWidth() - e.clientX;
-      // Any modifier key links the far side: it takes the dragged side's own
-      // width for as long as the key is held, so engaging centers the page
-      // and the two move together from there (pressing/releasing mid-drag
-      // both work).
-      const modifier = e.altKey || e.ctrlKey || e.metaKey || e.shiftKey;
-      if (modifier !== mirroring) {
-        mirroring = modifier;
-        if (mirroring) {
-          mirrorFrom = widths[other];
-          mirrorZoom = zoom;
-        } else {
-          // Letting the modifier go undoes the link rather than freezing it:
+      // A modifier links the far side for as long as it is held — Shift/Ctrl
+      // mirror it, Alt/⌘ slide the pair (see linkMode) — and pressing,
+      // releasing or swapping the key mid-drag all work. What releasing
+      // does is the one place the two links differ.
+      const mode = linkMode(e);
+      if (mode !== link) {
+        if (link === 'mirror') {
+          // Letting a mirror's modifier go undoes it rather than freezing it:
           // the far side returns to the width it had when the key went down,
           // so a mirrored excursion costs nothing if it turns out not to be
           // what you wanted. Clamped on the way back — the near side has
           // moved since, and MIN_GAP outranks the width being restored.
-          widths[other] = SQZ.clampDrag(mirrorFrom, widths[side]);
+          // Swapping a mirror for a slide passes through here as well, so
+          // the slide starts from that same home width.
+          widths[other] = SQZ.clampDrag(linkFrom, widths[side]);
         }
-        // Both directions are a jump the pointer is not tracking, so both
-        // glide (see the .glide rule). The page itself reflows at once
-        // underneath, which is the same choreography as every other glide.
-        glideFar();
-        els?.[other].handle.classList.toggle('active', mirroring);
+        // A slide is the opposite case and keeps what it did: the far side
+        // stays where the key left it, and the drag carries on as a plain
+        // one from there. A mirror's far side jumped away from a width the
+        // user had chosen, so going back is a courtesy; a slide's was put
+        // where it is deliberately, a pixel at a time, and undoing that
+        // would throw the page back across the screen the moment the key
+        // came up — a beat before the mouse button, as often as not, which
+        // is simply how hands end the gesture.
+        //
+        // A mirror's two ends are jumps the pointer is not tracking — the
+        // far side leaps to match on the way in and goes home on the way
+        // out — so both glide (see the .glide rule) while the page reflows
+        // at once underneath, the same choreography as every other glide.
+        // A slide has no jump at either end: its far side starts from where
+        // it already is, tracks the pointer one-for-one, and is left where
+        // it lies. It must NOT glide — an easing panel would trail the
+        // margin it is supposed to be moving with.
+        if (link === 'mirror' || mode === 'mirror') glideFar();
+        link = mode;
+        if (link) {
+          linkFrom = widths[other];
+          linkTotal = widths[side] + widths[other];
+          linkZoom = zoom;
+        }
+        els?.[other].handle.classList.toggle('active', link !== null);
         if (appearance.showReadout) {
-          els?.[other].readout.classList.toggle('show', mirroring);
+          els?.[other].readout.classList.toggle('show', link !== null);
         }
       }
-      if (mirroring) {
-        // mirrorFrom is CSS px like the widths it came from, so a zoom change
-        // mid-drag has to move it too (see setZoom). The live widths need no
-        // such care: both are a pure function of where the pointer is now.
-        if (mirrorZoom !== zoom) {
-          mirrorFrom *= mirrorZoom / zoom;
-          mirrorZoom = zoom;
+      if (link) {
+        // linkFrom and linkTotal are CSS px like the widths they came from,
+        // so a zoom change mid-drag has to move them too (see setZoom). A
+        // mirror's live widths need no such care — both are a pure function
+        // of where the pointer is now — but a slide's far side is the total
+        // minus the near one, and a stale total would resize the page.
+        if (linkZoom !== zoom) {
+          linkFrom *= linkZoom / zoom;
+          linkTotal *= linkZoom / zoom;
+          linkZoom = zoom;
         }
-        widths[side] = widths[other] = SQZ.mirrorWidth(pointerPx);
+        if (link === 'mirror') {
+          widths[side] = widths[other] = SQZ.mirrorWidth(pointerPx);
+        } else {
+          const pair = SQZ.slidePair(pointerPx, linkTotal);
+          widths[side] = pair.near;
+          widths[other] = pair.far;
+        }
       } else {
         widths[side] = SQZ.clampDrag(pointerPx, widths[other]);
       }
@@ -475,7 +517,7 @@ SQZ.panels ??= (() => {
       started = false;
       dragSide = null;
       dragClickPending = true; // the click about to fire carries this drag
-      mirroring = false;
+      link = null;
       host?.classList.remove('dragging');
       handle.classList.remove('active');
       readout.classList.remove('show');
@@ -492,7 +534,6 @@ SQZ.panels ??= (() => {
     };
     handle.addEventListener('pointerup', finish);
     handle.addEventListener('pointercancel', finish);
-
   }
 
   // One-shot width change outside a drag (the dblclick gestures): adopt,
@@ -587,7 +628,7 @@ SQZ.panels ??= (() => {
           dragInPair = false; // this pair of clicks was a resize, not a gesture
           return;
         }
-        if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
+        if (heldModifier(e)) {
           callbacks.onReset?.();
         } else if (widths[side] > 0) {
           setSideWidth(side, 0);
@@ -639,7 +680,15 @@ SQZ.panels ??= (() => {
       done = true;
       oldHost.remove();
     };
-    oldEls.left.panel.addEventListener('transitionend', finish, { once: true });
+    // The slide-out is the panel's own transform, and only that may end it.
+    // transitionend bubbles, so the handle bar's 120ms fade (the pointer was
+    // resting on it, or a modifier had just lit it) arrives here too, and a
+    // width glide still playing ends before a slide that started after it —
+    // either one would pull the host out from under a panel still in motion.
+    const leftPanel = oldEls.left.panel;
+    leftPanel.addEventListener('transitionend', (e) => {
+      if (e.target === leftPanel && e.propertyName === 'transform') finish();
+    });
     // Reduced motion and hidden tabs never fire transitionend.
     setTimeout(finish, 300);
   }

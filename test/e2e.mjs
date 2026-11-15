@@ -796,7 +796,7 @@ async function main() {
     await mouse('mouseReleased', 320, 450, 1);
     await waitFor(async () => (await pageSnap()).ml === '320px', 3000, 'drag back to 320');
 
-    // Mirrored drag: holding any modifier makes the other side MATCH the
+    // Mirrored drag: holding Shift or Ctrl makes the other side MATCH the
     // dragged one, so the page centers and both resize together. Shift-drag
     // left 320 -> 420 and the right side lands on 420 too — 300 is what it
     // would read if the far side merely followed by the same amount, which
@@ -813,6 +813,64 @@ async function main() {
       (v) => v.ml === '380px' && v.mr === '200px' && v.panel?.right === 200,
       3000, (v) => `ml=${v.ml} mr=${v.mr} panel=${JSON.stringify(v.panel)}`
         + ' (expected 380/200; 420 = frozen, not restored)');
+
+    // Slide drag: Alt (or ⌘) links the far side the other way round —
+    // whatever the dragged side gains the far side gives up, so the page
+    // keeps its width and moves. Alt-drag left 380 -> 460 and the right side
+    // must fall from 200 to 120: still 200 would be a plain drag (the page
+    // narrowed), 460 a mirror.
+    const ALT = 1;
+    const pairIs = (l, r) => (v) => v.ml === `${l}px` && v.mr === `${r}px`
+      && v.panel?.left === l && v.panel?.right === r;
+    const showPair = (want) => (v) => `ml=${v.ml} mr=${v.mr} `
+      + `panel=${JSON.stringify(v.panel)} (expected ${want})`;
+    await mouse('mousePressed', 380, 450, 1);
+    for (const x of [386, 420, 460]) await mouse('mouseMoved', x, 450, 0, ALT);
+    await mouse('mouseReleased', 460, 450, 1, ALT);
+    await checkFor('Alt-drag slides the page: one side gives up what the other gains',
+      pageSnap, pairIs(460, 120), 3000,
+      showPair('460/120; 200 on the right = the page narrowed instead of moving'));
+    await checkFor('the slid pair is what gets stored',
+      () => evalIn(sw, `chrome.storage.local.get(${JSON.stringify(PAGE_KEY)})`),
+      (st) => st[PAGE_KEY]?.left === 460 && st[PAGE_KEY]?.right === 120,
+      3000, (st) => JSON.stringify(st[PAGE_KEY] ?? null));
+
+    // Letting Alt go mid-drag is where a slide parts ways with a mirror: it
+    // KEEPS what it did. Slide left to 300 (right 280), drop the key, pull
+    // to 380 — the right side stays at the 280 the key left it on and the
+    // drag carries on as a plain one. 120 there would mean it was sent home
+    // to the width it held when the key went down, which is the mirror's
+    // rule and throws the page back across the screen when applied here.
+    await mouse('mousePressed', 460, 450, 1);
+    for (const x of [454, 400, 300]) await mouse('mouseMoved', x, 450, 0, ALT);
+    await mouse('mouseMoved', 380, 450);
+    await mouse('mouseReleased', 380, 450, 1);
+    await checkFor('releasing Alt mid-drag keeps the far side where the slide left it',
+      pageSnap, pairIs(380, 280), 3000, showPair('380/280; 120 = sent home, not kept'));
+
+    // The slide stops where a sidebar reaches the page border: the far side
+    // has nothing left to give, and letting the dragged side carry on alone
+    // would narrow the page after all. 380/280 totals 660, so a drag thrown
+    // far past that must stop at 660/0.
+    await mouse('mousePressed', 380, 450, 1);
+    for (const x of [386, 600, FAR]) await mouse('mouseMoved', x, 450, 0, ALT);
+    await mouse('mouseReleased', FAR, 450, 1, ALT);
+    await checkFor('a slide stops at the page border rather than narrowing the page',
+      pageSnap, pairIs(660, 0), 3000, showPair('660/0'));
+
+    // And back the other way: the collapsed side reopens by exactly what
+    // the dragged side gives back. A plain drag then restores the 380/200
+    // the sections below start from.
+    await mouse('mousePressed', 660, 450, 1);
+    for (const x of [654, 560, 460]) await mouse('mouseMoved', x, 450, 0, ALT);
+    await mouse('mouseReleased', 460, 450, 1, ALT);
+    await checkFor('sliding back reopens the far side by the same amount',
+      pageSnap, pairIs(460, 200), 3000, showPair('460/200'));
+    await mouse('mousePressed', 460, 450, 1);
+    for (const x of [454, 420, 380]) await mouse('mouseMoved', x, 450);
+    await mouse('mouseReleased', 380, 450, 1);
+    await waitFor(async () => pairIs(380, 200)(await pageSnap()),
+      3000, 'plain drag back to 380/200');
 
     // The far side's jump to match and its trip home are the only width
     // changes inside a drag that animate, and the CSS says so by outranking
@@ -1336,6 +1394,15 @@ async function main() {
         === JSON.stringify(['DO NOTHING', 'SHOW PILLARS', 'DO NOTHING']),
       JSON.stringify(optState.behaviors));
 
+    // jsBreakpoints has no control on this page — the matchMedia hook is on
+    // for everyone — and because a save writes the form wholesale, a `false`
+    // left in storage (hand-written, or synced over from a build that still
+    // had the checkbox) must not survive one. Planted here, so the theme save
+    // just below is the save that has to drop it.
+    await settingsSet({
+      theme: 'light', defaultLeft: 200, defaultRight: 200, jsBreakpoints: false,
+    });
+
     // Clicking the dark radio saves immediately and re-themes the page.
     await evalIn(opts, `document.querySelector('input[name="theme"][value="dark"]').click(); true`);
     await checkFor('options: theme change saves and re-themes the page',
@@ -1344,6 +1411,11 @@ async function main() {
         page: await evalIn(opts, `document.documentElement.dataset.theme`),
       }),
       (v) => v.stored === 'dark' && v.page === 'dark', 3000);
+    const afterSave = (await evalIn(sw, `chrome.storage.sync.get('settings')`)).settings;
+    check('options: no jsBreakpoints control, and a save drops a stored false (on for everyone)',
+      (await evalIn(opts, `document.getElementById('jsBreakpoints') === null`))
+        && !!afterSave && !('jsBreakpoints' in afterSave),
+      JSON.stringify(afterSave));
 
     // The dark theme inverts the whole poster (ink/paper swap), and the
     // tint hex readouts follow the stored colors.
@@ -1353,14 +1425,33 @@ async function main() {
     check('options: dark theme inverts the poster; tint readouts follow',
       (await evalIn(opts, `document.getElementById('colorDarkHex').textContent`)) === '#1d2126');
 
-    // The gesture ledger renders, with this platform's modifier run filled in.
+    // The gesture ledger renders, with this platform's modifier runs filled
+    // in — one for each kind of linked drag, and they must not be the same.
     const gestures = await evalIn(opts, `({
       rows: [...document.querySelectorAll('.gesture')].length,
-      modRun: document.querySelector('.modkeys')?.textContent ?? '',
+      mirror: document.querySelector('.modkeys[data-keys="mirror"]')?.textContent ?? '',
+      slide: document.querySelector('.modkeys[data-keys="slide"]')?.textContent ?? '',
     })`);
     check('options: gesture ledger rendered with platform modifiers',
-      gestures.rows === 6 && /^(⇧\/⌃\/⌥\/⌘|SHIFT\/CTRL\/ALT)$/.test(gestures.modRun),
+      gestures.rows === 7
+        && ((gestures.mirror === '⇧/⌃' && gestures.slide === '⌥/⌘')
+          || (gestures.mirror === 'SHIFT/CTRL' && gestures.slide === 'ALT')),
       JSON.stringify(gestures));
+
+    // The tint editor lists this side's presets, with the tint in use marked.
+    const tints = await evalIn(opts, `(() => {
+      document.querySelector('.tint-open[data-side="dark"]').click();
+      const swatches = [...document.querySelectorAll('.tint-swatch')];
+      const out = {
+        count: swatches.length,
+        active: swatches.filter((s) => s.classList.contains('active')).map((s) => s.dataset.hex),
+      };
+      document.getElementById('tintClose').click();
+      return out;
+    })()`);
+    check('options: tint editor lists the presets and marks the one in use',
+      tints.count === 31 && JSON.stringify(tints.active) === '["#1d2126"]',
+      JSON.stringify(tints));
 
     // Rules editor: remote rules render as rows; adding and removing rows
     // saves through the same save-on-change path as every other field.
@@ -1967,7 +2058,9 @@ async function main() {
 
     // The jsBreakpoints kill switch, flipped live on an active page: the JS
     // side must go back to native answers while the CSS shift stays put —
-    // that split is the whole point of the escape hatch.
+    // that split is the whole point of the escape hatch. Storage is the only
+    // way to reach it now that the options page has no control for it, which
+    // is how this section has always flipped it anyway.
     await settingsSet({
       theme: 'light', defaultLeft: 300, defaultRight: 300, jsBreakpoints: false,
     });
@@ -1984,6 +2077,42 @@ async function main() {
       mqSnap, (v) => v.mm.q === false && v.mm.fresh === false, 8000,
       (v) => JSON.stringify(v.mm));
 
+    // A constructed sheet the page adopts, drops and adopts again keeps its
+    // object identity — and its MediaLists — the whole way through, unlike a
+    // <style> or <link>, whose sheet is minted afresh on every insertion. The
+    // registry forgets entries whose sheet left the document, so forgetting
+    // has to hand the page's own text back first. An entry dropped with the
+    // shifted text still in place returns as an "original" that already
+    // carries one shift, collects a second on top, and is then restored to
+    // the wrong text at toggle-off — wrong for the rest of the page's life.
+    const adoptedMedia = () => evalIn(mqPage, 'window.__adopted.cssRules[0].media.mediaText');
+    await evalIn(mqPage, `(() => {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync('@media (max-width: 1000px) { #late { outline-color: red } }');
+      window.__adopted = sheet;
+      document.adoptedStyleSheets = [sheet];
+      return true;
+    })()`);
+    await checkFor('an adopted constructed sheet is shifted like any other',
+      adoptedMedia, (t) => t.includes('1600px'), 8000, (t) => String(t));
+    await evalIn(mqPage, '(document.adoptedStyleSheets = [], true)');
+    await checkFor('a constructed sheet the page un-adopts gets its own media text back',
+      adoptedMedia, (t) => t === '(max-width: 1000px)', 8000, (t) => String(t));
+    await evalIn(mqPage, '(document.adoptedStyleSheets = [window.__adopted], true)');
+    // Held across a full rescan period, not sampled: a list that came back
+    // still carrying the old shift reads 1600px too — until the next rescan
+    // adds a second 600 on top.
+    await waitFor(async () => (await adoptedMedia()).includes('1600px'),
+      8000, 're-adopted constructed sheet shifted');
+    let readopted = null;
+    const shiftedOnce = await holds(async () => {
+      readopted = await adoptedMedia();
+      return readopted.includes('1600px');
+    }, 2600, 'the re-adopted sheet keeps a single shift');
+    check('re-adopted, that sheet is shifted once — not on top of a stale shift',
+      shiftedOnce,
+      `${readopted} (2200px = the original was forgotten and the shift applied twice)`);
+
     await toggleViaWorker(MQ_URL);
     mq = await checkFor(
       'toggle off: mediaTexts restored verbatim, clones gone, original sheet re-enabled',
@@ -1999,6 +2128,9 @@ async function main() {
     check('toggle off: width metrics native again',
       mq.iw === MQIW && mq.cwLied === MQCW,
       JSON.stringify({ iw: mq.iw, cw: mq.cwLied }));
+    const adoptedOff = await adoptedMedia();
+    check('toggle off: the re-adopted constructed sheet reads its original text',
+      adoptedOff === '(max-width: 1000px)', String(adoptedOff));
 
     // ---------- quirks mode ----------
     // WHICH element's clientWidth means "the viewport" is mode-dependent. In

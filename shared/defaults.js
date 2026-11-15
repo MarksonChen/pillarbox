@@ -15,7 +15,12 @@ SQZ.DEFAULT_SETTINGS = Object.freeze({
   showReadout: false,       // px readout bubble while dragging a handle
   jsBreakpoints: true,      // window.matchMedia sees the squeeze too (the
                             // MAIN-world hook; what makes YouTube reflow).
-                            // The escape hatch if a site's scripts misbehave.
+                            // On for everyone: the options page has no
+                            // control for it and never writes it. The field
+                            // is still read, so a `false` put in storage by
+                            // hand switches the hook off for debugging —
+                            // until the next options save or extension
+                            // update drops the key again.
   // Per-URL defaults, first match wins. These three ship as defaults; they
   // are ordinary rules in the options page — edit or remove freely (the
   // first save persists the list wholesale, so removal sticks). Two double
@@ -215,6 +220,23 @@ SQZ.clampDrag = (px, otherSide) => {
 SQZ.mirrorWidth = (px) => {
   const half = Math.floor(Math.max(0, SQZ.viewportWidth() - SQZ.MIN_GAP) / 2);
   return Math.max(0, Math.min(Math.round(Number(px)) || 0, half));
+};
+
+// Slide drag: the page keeps its width and moves. Whatever the dragged side
+// gains the far side gives up, so the one thing held constant is the pair's
+// total — `total` is what the two sides added up to when the modifier went
+// down. The dragged side therefore runs from 0 to that total and no further:
+// at either end one sidebar has reached the page border and there is nothing
+// left to trade, and stopping there (rather than letting the dragged side
+// carry on alone) is what keeps the promise that the page never narrows. The
+// total is capped to today's budget only for a window that shrank mid-drag;
+// otherwise the pair was already clamped and MIN_GAP is untouched by
+// construction.
+SQZ.slidePair = (px, total) => {
+  const budget = Math.max(0, SQZ.viewportWidth() - SQZ.MIN_GAP);
+  const sum = Math.max(0, Math.min(Math.round(Number(total)) || 0, budget));
+  const near = Math.max(0, Math.min(Math.round(Number(px)) || 0, sum));
+  return { near, far: sum - near };
 };
 
 // Clamp a stored pair for the current viewport (loads, resizes, cross-tab

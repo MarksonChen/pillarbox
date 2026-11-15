@@ -18,7 +18,8 @@
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Turn the sidebars on or off           | **Click** the toolbar icon, or **press** `Alt+Shift+S` (rebind it at `chrome://extensions/shortcuts`) |
 | Resize one side                       | **Drag** the sidebar edge                                                                                       |
-| Center the page and resize both sides | **Hold** any modifier key (Shift, Ctrl, Alt or ⌘) and **drag**                                           |
+| Center the page and resize both sides | **Hold** Shift or Ctrl and **drag**                                                                             |
+| Move the page, keeping its width      | **Hold** Alt or ⌘ and **drag**                                                                                  |
 | Collapse one side                     | **Double-click** it                                                                                             |
 | Bring a collapsed side back           | **Drag** from the page edge or double-click the edge                                                            |
 | Bring both collapsed sides back       | **Click** the toolbar icon                                                                                      |

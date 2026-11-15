@@ -1,6 +1,6 @@
 # Privacy Policy for Pillarbox
 
-**Last updated: August 10, 2026**
+**Last updated: November 14, 2026**
 
 Pillarbox does not collect, transmit, or sell your data. There is no server,
 no account, no analytics, and no telemetry. The developer never receives
@@ -16,10 +16,9 @@ Everything below is stored by your browser, on your computer, using the
 extension storage API. None of it is sent anywhere by Pillarbox.
 
 **Your settings** (`chrome.storage.sync`) — the theme, default sidebar widths,
-sidebar colors, whether the pixel readout appears while dragging, whether
-JavaScript breakpoints see the squeeze, and any per-URL rules you create.
-Per-URL rules contain the URL patterns *you type*, so if you write a rule for
-a site, that pattern is part of your settings.
+sidebar colors, whether the pixel readout appears while dragging, and any
+per-URL rules you create. Per-URL rules contain the URL patterns *you type*,
+so if you write a rule for a site, that pattern is part of your settings.
 
 **Per-page memory** (`chrome.storage.local`) — for each page where you have
 turned the sidebars on, Pillarbox remembers whether they are on and how wide

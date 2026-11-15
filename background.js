@@ -18,11 +18,18 @@ chrome.runtime.onInstalled.addListener(async () => {
   // `squeezeFixed: false` / `responsive: false` from a pre-release build
   // must not linger (nothing reads them, but a stale flag in storage
   // invites confusion).
+  //
+  // `jsBreakpoints` is retired differently: the field is still read, but its
+  // checkbox is gone from the options page. A `false` saved while the
+  // checkbox existed would leave its owner with the matchMedia hook off and
+  // nothing left to turn it back on with, so the key goes and the default —
+  // on — applies again.
   const raw = await chrome.storage.sync.get(SQZ.SETTINGS_KEY);
   const settings = raw[SQZ.SETTINGS_KEY];
-  const dead = ['squeezeFixed', 'responsive'].filter((k) => settings && k in settings);
-  if (dead.length) {
-    for (const k of dead) delete settings[k];
+  const retired = ['squeezeFixed', 'responsive', 'jsBreakpoints']
+    .filter((k) => settings && k in settings);
+  if (retired.length) {
+    for (const k of retired) delete settings[k];
     await chrome.storage.sync.set({ [SQZ.SETTINGS_KEY]: settings });
   }
 });

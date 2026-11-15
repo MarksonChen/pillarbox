@@ -137,11 +137,17 @@ SQZ.cssRelay ??= (() => {
   }
 
   // Rewrite url(...) references (and any @import url left behind) to be
-  // absolute. Skip absolute schemes, data:/blob:, protocol-relative //, and
-  // bare #fragments (same-document SVG paint servers must stay relative).
+  // absolute. Skip absolute schemes, data:/blob:, and bare #fragments
+  // (same-document SVG paint servers must stay relative). Protocol-relative
+  // //host/path is NOT skipped: it is relative in the one part that matters
+  // here, taking its scheme from whatever it resolves against — the sheet's
+  // own URL natively, the document's once the text sits in a clone. An https
+  // CDN sheet on an http page (any localhost dev server) would have its
+  // //fonts and //imports quietly downgraded to http, and such an @import
+  // would also miss the inlining below, which only follows absolute http(s).
   function absolutizeCssUrls(text, baseUrl) {
     const resolve = (value) => {
-      if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(value) || value === '') return null;
+      if (/^(?:[a-z][a-z0-9+.-]*:|#)/i.test(value) || value === '') return null;
       try { return new URL(value, baseUrl).href; } catch { return null; }
     };
     text = text.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"\s]+))\s*\)/gi,

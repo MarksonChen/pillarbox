@@ -325,8 +325,10 @@ if (!SQZ.booted) {
       };
     }
 
-    // The panels' own fallback when a side has never been open on this page.
-    // Global, not defaultWidths(): see the note on `defaults` in panels.js.
+    // The global default widths: what defaultWidths() falls back to when no
+    // rule matches, and the panels' own fallback when a side has never been
+    // open on this page — global there on purpose, not defaultWidths(): see
+    // the note on `defaults` in panels.js.
     function defaultsFromSettings() {
       return { left: settings.defaultLeft, right: settings.defaultRight };
     }
@@ -358,8 +360,7 @@ if (!SQZ.booted) {
     // widths yet, by the modifier + double-click reset, and by the toolbar
     // click that revives a page whose sides are both collapsed.
     function defaultWidths() {
-      return SQZ.matchRule(settings.rules, location.href)
-        ?? { left: settings.defaultLeft, right: settings.defaultRight };
+      return SQZ.matchRule(settings.rules, location.href) ?? defaultsFromSettings();
     }
 
     // Does a rule tell this URL to open its pillars unprompted? Only ever

@@ -36,7 +36,12 @@ through `chrome.scripting.executeScript` is harmless.
 
 - `chrome.storage.sync['settings']` — `{theme, defaultLeft, defaultRight, colorLight, colorDark, showReadout, jsBreakpoints, rules}`. `jsBreakpoints`
   gates the MAIN-world matchMedia hook (absent means `true` — the same
-  normalize-don't-migrate convention as the rule fields). `rules` is an
+  normalize-don't-migrate convention as the rule fields). It has no control
+  on the options page: the hook is on for everyone, the page never writes
+  the field, and the install/update cleanup drops a `false` saved back when a
+  checkbox for it existed. It is absent in practice, then, and survives as a
+  switch for debugging — written to storage by hand it is honoured, live,
+  until the next options save or update removes it again. `rules` is an
   ordered list of
   `{pattern, mode, autoShow, left, right}`; the first match wins. `mode` is
   `'regex'` or `'substring'`, and **absent means `'regex'`**; `autoShow` opens
@@ -87,16 +92,35 @@ to sit exactly under the pointer, and a resize or zoom re-clamp is a
 correction, not a movement. `.dragging` overrides it either way, and
 `prefers-reduced-motion` turns all of it off.
 
-One glide happens *inside* a drag, and it is the far side's alone: a modifier
-links it to the dragged side, so it jumps to match on the way in and returns
-to the width it held when the key went down on the way out. Neither move is
-tracking the pointer, so both animate — a `.glide` class on that one panel,
-spelled specifically enough to outrank `.dragging`. The dragged panel is never
-in it. While that class is on, the panel's own handle bar goes dark: a lit bar
-carried across the screen points at an edge that has not arrived yet. That the
-modifier is sampled on `pointermove` also decides an edge: letting the key go
-without moving the pointer again leaves the sides linked until the next move,
-which is the same way engaging has always worked.
+A modifier held through a drag links the far side to the dragged one, and
+which modifier says how. Shift or Ctrl **mirror** it: the far side takes the
+dragged side's width, so the page centers and the two resize as one
+(`SQZ.mirrorWidth`). Alt or ⌘ **slide** the pair: whatever the dragged side
+gains the far side gives up, so the page keeps its width and moves
+(`SQZ.slidePair`) — the pair's total is fixed when the key goes down, and the
+slide stops where either sidebar reaches the page border rather than letting
+the dragged side carry on alone and narrow the page after all. Either link
+lasts only as long as the key, and what happens when the key comes up
+mid-drag is the one place they differ. A mirror is undone: the far side
+returns to the width it held when the key went down, so a mirrored excursion
+costs nothing — it had jumped away from a width the user chose. A slide is
+kept: the far side stays where the key left it and the drag carries on as a
+plain one from there, because that position was put there deliberately, a
+pixel at a time, and the key coming up a beat before the mouse button is
+simply how hands end the gesture.
+
+One glide happens *inside* a drag, and it is the far side's alone: a mirror
+engaging makes it jump to match, and a mirror ending sends it home. Neither
+move is tracking the pointer, so both animate — a `.glide` class on that one
+panel, spelled specifically enough to outrank `.dragging`. A slide glides at
+neither end: its far side starts from where it already is, tracks the pointer
+one-for-one and is left where it lies, and an easing panel would trail the
+margin it is moving with. The dragged panel is never in it. While that class
+is on, the panel's own handle bar goes dark: a lit bar carried across the
+screen points at an edge that has not arrived yet. That the modifier is
+sampled on `pointermove` also decides an edge: letting the key go without
+moving the pointer again leaves the sides linked until the next move, which
+is the same way engaging has always worked.
 
 **The link preview.** Resting on a handle with a modifier held lights the far
 side's bar too, before any drag — the near one is lit by `:hover` already.
@@ -192,7 +216,9 @@ buffered before the limit. Opaque sheets are fetched there, `@import` chains
 inlined (depth 3, active-path cycle- and byte-capped, repeated imports
 preserved at each cascade location, conditions rewritten as equivalent
 `@layer`/`@supports`/`@media` wrappers) and `url()`s absolutized against the
-sheet's own URL (a clone parses at the document base). The text is replayed in
+sheet's own URL (a clone parses at the document base — protocol-relative
+`//host/path` included, since the scheme it inherits is the sheet's natively
+and would become the document's in a clone). The text is replayed in
 a `<style>` clone inserted at the owner `<link>` — content-script- inserted
 `<style>` bypasses page CSP (Chrome behaviour rather than documented contract,
 which is why the CSP e2e pins it), and the position keeps cascade order, which
@@ -223,7 +249,15 @@ added later are caught by a childList observer; rules added through
 DOM node, so a 2s full rule walk covers nested insertions and unchanged
 top-level counts too. Each registry entry remembers the exact normalized text
 Pillarbox last wrote; a different live value is rebased as page-owned and
-survives later drags and toggle-off. A media flip can restyle a bar without
+survives later drags and toggle-off. An entry whose sheet has left the
+document is restored before it is forgotten, not merely dropped: a `<style>`
+or `<link>` mints a fresh sheet on every insertion, but a constructed sheet
+can leave `adoptedStyleSheets` and come back as the same object with the same
+lists, and one forgotten while still shifted would return looking like an
+original, be shifted a second time, and never find its way back. The
+transform itself is memoized per (shift, viewport) — thousands of rules share
+a few dozen distinct media texts, and both the rescan and every drag flush
+re-derive all of them. A media flip can restyle a bar without
 touching any attribute — invisible to the fixed-bar observer — so every shift
 application nudges `fixedBars.update()`, whose debounced rescan re-adopts
 whatever the new layout revealed. Printing runs `stop()` first: print media
@@ -299,8 +333,8 @@ itself. The toolbar-click fallback injects the pair (`world: 'MAIN'`) before
 the isolated files so the first announcement finds a listener, but that late
 injection cannot retrofit lists the page already minted through the native
 `matchMedia` — such tabs reflow fully only after their next reload. Gated by
-the `jsBreakpoints` setting (default on; `mediaQueries.setJsHooks` flips it
-live).
+the `jsBreakpoints` field (on unless storage says `false`, with no control for
+it on the options page — see State; `mediaQueries.setJsHooks` flips it live).
 
 While squeezed, the width METRICS lie as well: `window.innerWidth` and the
 viewport `clientWidth` answer minus the shift. Breakpoint questions turned
@@ -393,8 +427,10 @@ and `options.js` seeds the record on first visit. Its `<script>` list must
 include `shared/mq-shift.js` (media-queries.js depends on it) but must NOT
 include `content/match-media.js`: an extension page has no isolated/main
 world split, so the width-metric lie would feed straight back into the
-extension's own clamp math. The e2e's "options page runs its own live
-pillars" check is the canary for this list drifting.
+extension's own clamp math. `test/unit.mjs` compares this list against the
+manifest and `SQZ.CONTENT_FILES` directly, and the e2e's "options page runs
+its own live pillars" check is the canary for a file that is listed but
+throws on an extension page.
 
 The poster is designed on a 1440px canvas. `--u` is the scale unit — 1px at
 ≥1440, proportionally less below — and is applied to the display type so the
@@ -470,9 +506,12 @@ open http://localhost:8080/page.html     # Windows: start http://localhost:8080/
 ```
 
 Automated checks need Node ≥ 22. Install the development dependencies once;
-`npm run check` runs ESLint plus the fast pure-function regressions. The full
-suite additionally needs Chrome for Testing — branded Chrome ≥ 137 ignores
-`--load-extension`:
+`npm run check` runs ESLint plus the fast pure-function regressions — the
+relay's URL policy, the media-text transform, the rule matcher and the width
+clamps — and compares the copies that have to agree but cannot be shared (the
+three content-script file lists, the two version fields, the suggested
+shortcut), where drift otherwise fails silently. The full suite additionally
+needs Chrome for Testing — branded Chrome ≥ 137 ignores `--load-extension`:
 
 ```sh
 npm install
@@ -517,8 +556,10 @@ its `@import`, preserves repeated imports, absolutizes `url()`s and keeps
 cascade order, disabled sheets are never cloned, an allowed redirect is
 followed while the response it lands on is still validated, non-CSS relay
 responses are refused, top-level and nested insertRule-added rules get picked
-up, page-written mediaTexts are rebased, updates re-derive from originals, and
-toggle-off restores the latest page text verbatim), and the MAIN-world
+up, page-written mediaTexts are rebased, updates re-derive from originals, a
+constructed sheet the page un-adopts gets its text back and is shifted only
+once when it returns, and toggle-off restores the latest page text verbatim),
+and the MAIN-world
 matchMedia hook (page-held lists minted before the squeeze flip through
 addListener/onchange/addEventListener with the original media text intact,
 lists minted mid-squeeze are born shifted, orientation tracks the effective

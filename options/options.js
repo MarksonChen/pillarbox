@@ -16,13 +16,16 @@ function applyPageTheme(theme) {
 }
 scheme.addEventListener('change', () => applyPageTheme(currentTheme));
 
+// Every field with a control on this page, and nothing else. `jsBreakpoints`
+// is deliberately not among them: the matchMedia hook is on for everyone and
+// has no control here, and because a save writes this object wholesale, the
+// field never reaches storage from this page — absent, it reads as `true`.
 function formState() {
   return {
     theme: document.querySelector('input[name="theme"]:checked')?.value ?? 'auto',
     defaultLeft: SQZ.clampDefault($('#defaultLeft').value),
     defaultRight: SQZ.clampDefault($('#defaultRight').value),
     showReadout: $('#showReadout').checked,
-    jsBreakpoints: $('#jsBreakpoints').checked,
     colorLight: $('#colorLight').value,
     colorDark: $('#colorDark').value,
     rules: rulesFromForm(),
@@ -211,16 +214,26 @@ function syncTints() {
 // dialog as the escape hatch. It only ever writes through the hidden
 // native inputs, so every change rides the normal save-on-change path.
 const TINT_PRESETS = {
-  // Neutrals first, then warm papers, cool blues, greens, pinks, violet.
+  // Grouped by family, in the same order on both sides: neutrals first (the
+  // shipped default leads), then warm papers, cool blues, greens, pinks,
+  // violets. The swatch grid wraps wherever the column width says, so the
+  // line breaks here are for reading, not for layout.
   light: [
-    '#eef0f3', '#ffffff', '#f7f8fa', '#e9ecf1', '#e5e5e5', '#dcdcdc',
-    '#f6f1e6', '#f2e8da', '#eee0c9', '#e7edf4', '#dfe8f2', '#d8e4ee',
-    '#e6efe8', '#dcebe2', '#f4e9ec', '#ece6f4',
+    '#eef0f3', '#ffffff', '#f7f8fa', '#e9ecf1', '#e5e5e5', '#dcdcdc', '#e8e2d8', '#d9d4cc',
+    '#f6f1e6', '#f2e8da', '#eee0c9', '#fbf6dc', '#f5ecc4', '#fbe9dd', '#f6dcc9',
+    '#e7edf4', '#dfe8f2', '#d8e4ee', '#dde3f6', '#d5ecf7',
+    '#e6efe8', '#dcebe2', '#dff3e4', '#d7efee', '#e3e8d6',
+    '#f4e9ec', '#f8e1e4', '#f1d5dc',
+    '#ece6f4', '#e6e0f5', '#ddd5ee',
   ],
   dark: [
-    '#1d2126', '#000000', '#0b0d10', '#101014', '#14181f', '#191d24',
-    '#1a1a1a', '#222222', '#262626', '#221a14', '#262016', '#14201e',
-    '#16241c', '#1c1626', '#201420', '#24141a',
+    '#1d2126', '#000000', '#0b0d10', '#101014', '#14181f', '#191d24', '#1a1a1a', '#222222',
+    '#262626', '#2e3033',
+    '#221a14', '#262016', '#2a1f1a', '#2e2418', '#26261a',
+    '#0f1a2b', '#14233a', '#1b2433',
+    '#14201e', '#16241c', '#0f2327', '#132a2c', '#18261a', '#1f2a1c',
+    '#24141a', '#2a1518', '#2c1a22',
+    '#1c1626', '#201420', '#221a30', '#2a1830',
   ],
 };
 let tintSide = null; // 'light' | 'dark' | null = editor closed
@@ -310,7 +323,6 @@ async function loadSettings({ clearError = true } = {}) {
   $('#defaultLeft').value = s.defaultLeft;
   $('#defaultRight').value = s.defaultRight;
   $('#showReadout').checked = s.showReadout === true;
-  $('#jsBreakpoints').checked = s.jsBreakpoints !== false; // default on
   $('#colorLight').value = SQZ.sanitizeColor(s.colorLight, SQZ.DEFAULT_SETTINGS.colorLight);
   $('#colorDark').value = SQZ.sanitizeColor(s.colorDark, SQZ.DEFAULT_SETTINGS.colorDark);
   renderRules(s.rules);
@@ -483,35 +495,42 @@ $('#openShortcuts').addEventListener('click', () => {
   chrome.tabs.create({ url: shortcutsUrl() });
 });
 
-$('#openIssue').addEventListener('click', () => {
-  chrome.tabs.create({ url: 'https://github.com/MarksonChen/pillarbox/issues/new' });
-});
-
-// Header strip. Same destination as the bug card at the foot of the page —
-// the two are the same errand reached from either end of a long poster.
-$('#openFeedback').addEventListener('click', () => {
-  chrome.tabs.create({ url: 'https://github.com/MarksonChen/pillarbox/issues/new' });
-});
+// The bug card at the foot of the page and the feedback link in the header
+// strip share one destination — the same errand reached from either end of
+// a long poster.
+const ISSUE_URL = 'https://github.com/MarksonChen/pillarbox/issues/new';
+for (const id of ['#openIssue', '#openFeedback']) {
+  $(id).addEventListener('click', () => {
+    chrome.tabs.create({ url: ISSUE_URL });
+  });
+}
 
 $('#openCoffee').addEventListener('click', () => {
   chrome.tabs.create({ url: 'https://buymeacoffee.com/chenmarksof' });
 });
 
-// Web Store review link. REVIEW_URL pins the listing once published; until
-// it is set, the runtime id resolves correctly for store installs.
-const REVIEW_URL = '';
+// Web Store review link, pinned to the published listing rather than built
+// from chrome.runtime.id. The two agree on a store install, but an unpacked
+// copy's id is derived from the folder it was loaded from and names no
+// listing at all — from source, the button opened a store 404.
+const REVIEW_URL = 'https://chromewebstore.google.com/detail/dkpbgnpcfibeanmdbidlggfijfcdlidg/reviews';
 $('#openReview').addEventListener('click', () => {
-  chrome.tabs.create({
-    url: REVIEW_URL || `https://chromewebstore.google.com/detail/${chrome.runtime.id}/reviews`,
-  });
+  chrome.tabs.create({ url: REVIEW_URL });
 });
 
-// Gesture legend: any modifier key means "both sides" (mirrored drag,
-// reset). Show this platform's modifiers, slash-run style.
+// Gesture legend: a modifier held through a drag means "both sides", and
+// which modifier says how — Shift/Ctrl mirror the far side, Alt/⌘ slide the
+// pair (panels.js linkMode). Show this platform's keys, slash-run style;
+// each .modkeys box names the run it wants. ⌘ is listed on a Mac only: the
+// same bit is the Windows key elsewhere, which the OS keeps for itself.
 function renderModKeys() {
   const mac = navigator.platform.startsWith('Mac');
-  const run = (mac ? ['⇧', '⌃', '⌥', '⌘'] : ['SHIFT', 'CTRL', 'ALT']).join('/');
-  for (const box of document.querySelectorAll('.modkeys')) box.textContent = run;
+  const runs = mac
+    ? { mirror: '⇧/⌃', slide: '⌥/⌘' }
+    : { mirror: 'SHIFT/CTRL', slide: 'ALT' };
+  for (const box of document.querySelectorAll('.modkeys')) {
+    box.textContent = runs[box.dataset.keys] ?? '';
+  }
 }
 
 // The bottom ticker: one phrase repeated far past the canvas width, twice —
