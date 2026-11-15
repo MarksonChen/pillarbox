@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Pillarbox: Push Pages Left/Right/Inward",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minimum_chrome_version": "111",
   "description": "Push page content leftward / rightward / inward with adjustable sidebars",
   "permissions": ["storage", "scripting"],
