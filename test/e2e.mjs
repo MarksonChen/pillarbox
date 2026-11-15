@@ -414,7 +414,14 @@ async function main() {
     const openPage = async (url) => {
       const { targetId } = await cdp.send('Target.createTarget', { url });
       const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
-      await waitFor(() => evalIn(sessionId, 'document.readyState === "complete"'),
+      // A new target starts life on the initial about:blank document, which
+      // is already "complete" — so readyState alone can be answered by the
+      // wrong document, before the navigation has so much as committed. That
+      // is not hypothetical: on Windows with Chrome 157 the wait returned at
+      // once, the settle sleep after it ran out with the real page still
+      // parsing, and the first snapshot found no elements at all.
+      await waitFor(() => evalIn(sessionId,
+        'location.href !== "about:blank" && document.readyState === "complete"'),
         10000, `load of ${url}`);
       return sessionId;
     };
@@ -482,7 +489,8 @@ async function main() {
     await sleep(300); // let the (dormant) content script finish booting
 
     const base = await evalIn(page, SNAP);
-    check('baseline: no squeeze', base.ml === '0px' && !base.host && near(base.nav.width, base.cw),
+    check('baseline: no squeeze',
+      base.ml === '0px' && !base.host && !!base.nav && near(base.nav.width, base.cw),
       JSON.stringify(base));
 
     const on = await toggleViaWorker(`${BASE}/page.html`);
